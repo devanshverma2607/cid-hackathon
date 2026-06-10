@@ -1,0 +1,210 @@
+services:
+
+  # ----------------------------------------------------------------------
+  # PostgreSQL 15 + pgvector — relational store + semantic similarity
+  # ----------------------------------------------------------------------
+  postgres:
+    image: pgvector/pgvector:pg15
+    env_file: .env
+    environment:
+      POSTGRES_DB: socmint
+      POSTGRES_USER: socmint
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./api/db/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U socmint -d socmint"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ----------------------------------------------------------------------
+  # Neo4j 5 Community — identity graph store
+  # ----------------------------------------------------------------------
+  neo4j:
+    image: neo4j:5-community
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD}
+    volumes:
+      - neo4jdata:/data
+    ports:
+      - "7474:7474"   # Browser UI
+      - "7687:7687"   # Bolt protocol
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:7474 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ----------------------------------------------------------------------
+  # Redis 7 — Celery broker + result backend
+  # ----------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    env_file: .env
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  # ----------------------------------------------------------------------
+  # MinIO — object storage for preserved evidence artifacts
+  # ----------------------------------------------------------------------
+  minio:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    env_file: .env
+    environment:
+      MINIO_ROOT_USER: ${MINIO_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD}
+    volumes:
+      - miniodata:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"   # Console UI
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+
+  # ----------------------------------------------------------------------
+  # Tor SOCKS proxy — anonymised egress for Tier 3 passive recon (port 9050)
+  # ----------------------------------------------------------------------
+  tor:
+    image: osminogin/tor-simple:latest
+    restart: unless-stopped
+    expose:
+      - "9050"
+
+  # ----------------------------------------------------------------------
+  # Celery worker (Python tools) — Tier 1/2/3/4 Python adapters
+  # ----------------------------------------------------------------------
+  worker_python:
+    build:
+      context: .
+      dockerfile: worker_python/Dockerfile
+    env_file: .env
+    environment:
+      TOR_PROXY: socks5://tor:9050   # route Tor-tier adapters via the sidecar
+      # The Go OSINT binaries (enola, DetectDee, email2whatsapp, ...) are
+      # compiled in the worker_go image and shared in via the go_tools volume.
+      GO_TOOLS_DIR: /opt/go_tools
+    command: celery -A worker_python.celery_app worker --loglevel=info --concurrency=4
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      tor:
+        condition: service_started
+      worker_go:
+        condition: service_started
+    volumes:
+      - ./worker_python:/app/worker_python   # hot-reload during development
+      - ./api:/app/api                       # hot-reload during development
+      - ./worker_go:/app/worker_go           # cross-package adapters (Go tier)
+      # NOTE: the git-distributed OSINT tools are baked into the image at
+      # /tools/python; do NOT bind-mount over it or the cloned tools vanish.
+      - go_tools:/opt/go_tools:ro            # compiled Go binaries from worker_go
+      - evidence_cases:/app/cases
+    restart: unless-stopped
+
+  # ----------------------------------------------------------------------
+  # Celery worker (Go binaries) — Enola, DetectDee, Mailsleuth, etc.
+  # ----------------------------------------------------------------------
+  worker_go:
+    build:
+      context: .
+      dockerfile: worker_go/Dockerfile
+    env_file: .env
+    # Publish the image-baked Go binaries into the shared go_tools volume on
+    # startup so worker_python (which runs the Go adapters inline in its tier2
+    # chains) can health-check and execute them too.
+    command: >
+      sh -c "mkdir -p /opt/go_tools && cp -f /app/tools/go/* /opt/go_tools/ 2>/dev/null || true;
+      exec celery -A worker_go.celery_app worker --loglevel=info --concurrency=2"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    volumes:
+      - ./worker_go:/app/worker_go
+      - ./api:/app/api
+      - ./worker_python:/app/worker_python   # cross-package base adapter
+      # NOTE: the compiled Go binaries are baked into the image at
+      # /app/tools/go; do NOT bind-mount over it or the binaries vanish.
+      - go_tools:/opt/go_tools               # publish binaries for worker_python
+      - evidence_cases:/app/cases
+    restart: unless-stopped
+
+  # ----------------------------------------------------------------------
+  # FastAPI gateway
+  # ----------------------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    env_file: .env
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./api:/app/api
+      - ./worker_python:/app/worker_python
+      - ./worker_go:/app/worker_go           # lazy import in preservation service
+      - evidence_cases:/app/cases
+    restart: unless-stopped
+
+  # ----------------------------------------------------------------------
+  # Streamlit analyst dashboard
+  # ----------------------------------------------------------------------
+  dashboard:
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
+    env_file: .env
+    environment:
+      API_BASE_URL: http://api:8000
+    depends_on:
+      - api
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./dashboard:/app/dashboard
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  neo4jdata:
+  miniodata:
+  evidence_cases:
+  go_tools:

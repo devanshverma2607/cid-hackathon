@@ -1,0 +1,1 @@
+"""Username discovery adapters."""

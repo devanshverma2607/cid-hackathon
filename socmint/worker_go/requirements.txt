@@ -1,0 +1,12 @@
+# Framework dependencies for the Go-binary Celery worker. The Go OSINT tools
+# (Enola, DetectDee, Mailsleuth, email2whatsapp, GitHound, GoWitness) are
+# compiled into /app/tools/go and invoked as subprocesses.
+celery==5.4.0
+redis==5.0.8
+sqlalchemy==2.0.35
+psycopg2-binary==2.9.9
+pgvector==0.3.3
+minio==7.2.8
+httpx==0.27.2
+pydantic==2.9.2
+pydantic-settings==2.5.2

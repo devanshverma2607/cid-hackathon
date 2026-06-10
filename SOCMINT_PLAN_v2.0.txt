@@ -1,0 +1,1694 @@
+================================================================================
+                    SOCMINT — SOCIAL MEDIA INTELLIGENCE
+                       SUSPECT PROFILING SYSTEM
+              HACKATHON IMPLEMENTATION PLAN v2.0 — 4 WEEKS
+         3-4 Person Team | Python-Heavy | Free Stack | Impact-Judged
+================================================================================
+     Based on SOCMINT Hackathon Plan v1.0 + OSINT Cabal Tool Integration
+     Scoped for: 1 month | Free tools only | Hackathon demo deliverable
+     GitHub Copilot assisted development throughout
+     Upgraded: Full OSINT Cabal Linux CLI + Go tool suite integrated
+================================================================================
+
+WHAT THIS PLAN IS:
+  An upgraded, maximally-powered SOCMINT Suspect Profiling MVP buildable in
+  4 weeks by a 3-4 person Python-heavy team using only free tools. This plan
+  replaces v1.0 and integrates the full OSINT Cabal Linux CLI toolkit across
+  all pipeline stages. Tool count grows from 6 to 35+ active tools running
+  in tiered parallel chains. Coverage grows from ~600 platforms to 1000+.
+  Nothing in this plan requires paid services, licensed software, or
+  infrastructure budget.
+
+WHAT THIS PLAN IS NOT:
+  This is not the full production system. The following are explicitly
+  deferred and NOT in scope:
+    - Residential proxy pools (paid)
+    - HashiCorp Vault (replaced by env files)
+    - Calibration engine with benchmark datasets (no time)
+    - Full React + D3.js dashboard (replaced by Streamlit)
+    - Prometheus + Grafana observability stack
+    - Analyst override rate tracking
+    - Per-platform deep-dive tools that require paid API keys
+    - Live court / public records integration (documented only)
+
+  These are documented as Phase 2 / post-hackathon extensions.
+
+================================================================================
+TABLE OF CONTENTS
+================================================================================
+  1.  Executive Summary
+  2.  Hackathon Scope & Objectives
+  3.  Upgraded Free Tool Stack (v2.0)
+  4.  System Architecture (Hackathon Edition v2.0)
+  5.  Module Breakdown
+  6.  4-Week Implementation Roadmap
+  7.  Team Split & Ownership
+  8.  End-to-End Pipeline Workflow
+  9.  Correlation Engine (Upgraded)
+  10. Evidence Schema (Minimum Viable)
+  11. Tool Integration Plan (Full 35+ Tool Suite)
+  12. Free Infrastructure Setup
+  13. Demo Script & Winning Narrative
+  14. What to Show Judges
+  15. Phase 2 Roadmap (Post-Hackathon)
+  16. Technical Risks & Mitigations
+
+
+================================================================================
+1. EXECUTIVE SUMMARY
+================================================================================
+
+This plan delivers a working SOCMINT Suspect Profiling MVP in 4 weeks.
+Version 2.0 integrates the full OSINT Cabal Linux CLI toolkit, expanding
+the tool suite from 6 to 35+ active tools across all pipeline stages.
+
+Given a single seed (username OR email OR phone), the system will:
+
+  DISCOVER     — Automatically find linked accounts across 1000+ platforms
+                 using 15+ integrated OSINT tools running in parallel tiers
+
+  CORRELATE    — Score identity links probabilistically using weighted signals
+                 with a minimum 2-signal corroboration rule, now enriched
+                 with Google account data, Gravatar correlation, WhatsApp
+                 linkage, bio similarity, and breach credential reuse
+
+  PRESERVE     — Screenshot and hash every positive hit at discovery time
+                 so evidence cannot be lost to platform deletions, backed up
+                 to Wayback Machine and archived via WayBackPack
+
+  VISUALISE    — Display a live identity graph showing linked accounts,
+                 confidence scores, signal breakdowns, and platform clusters
+
+  REPORT       — Generate a structured JSON + PDF evidence package with
+                 full provenance, audit trail, and SHA-256 signed bundle
+
+  PLATFORM DIG — Run platform-specific tools (TikTok, Snapchat, Telegram,
+                 Mastodon, Bluesky, 4chan, ProtonMail) on confirmed hits
+                 for deeper profile data beyond basic account discovery
+
+  DORK & CRAWL — Passive exposure discovery via Google dorking and web
+                 crawling without touching target platforms directly
+
+The system is built entirely on free, open-source tools and runs locally
+via Docker Compose. No paid APIs, no cloud spend, no licensing costs.
+
+This is demonstrably superior to manual investigation:
+  Manual: 1 analyst, 20+ platforms, hours of work, no audit trail
+  This system: Automated, parallel, scored, preserved, auditable, < 60 min
+               35+ tools, 1000+ platforms, 10+ signal types, full chain
+
+
+================================================================================
+2. HACKATHON SCOPE & OBJECTIVES
+================================================================================
+
+2.1 PRIMARY OBJECTIVES (must deliver)
+  [1]  Automated username enumeration across 1000+ platforms
+       (Sherlock + Maigret + Blackbird + WhatsMyName + Nexfil + Social-Analyzer)
+  [2]  Email-to-account discovery across 200+ services
+       (Holehe + H8mail + Zehef + Mailsleuth + Mailcat + Eyes + SocialScan)
+  [3]  Google account data extraction from email seed (Ghunt)
+  [4]  Gravatar correlation for email and username seeds (Hashtray)
+  [5]  Probabilistic identity correlation with confidence scores
+  [6]  Evidence preservation: screenshot + SHA-256 hash at discovery time
+  [7]  Identity graph visualisation (Neo4j or NetworkX + Plotly)
+  [8]  Structured report output (JSON evidence package + PDF summary)
+  [9]  Legal gate: mandatory fields before any collection begins
+  [10] Immutable audit log of every tool run and analyst action
+  [11] Wayback Machine backup + WayBackPack archive on all positive hits
+  [12] Platform-specific tools on confirmed hits (TikTok, Snapchat, Telegram)
+
+2.2 SECONDARY OBJECTIVES (build if time allows)
+  [A]  Bio similarity matching via sentence-transformers + pgvector
+  [B]  Breach data correlation with evidence decay weighting
+  [C]  Domain recon on personal sites found (FinalRecon + TheHarvester)
+  [D]  Google dorking on the target seed (Dorks Eye + Dorksint)
+  [E]  Writing style / posting pattern analysis
+  [F]  Tracer identity-reuse tracking across confirmed accounts
+  [G]  Email2WhatsApp linkage probe
+  [H]  OSINTSky Bluesky investigation on confirmed hits
+  [I]  OSINTChan 4chan probe on confirmed usernames
+  [J]  Proton Intelligence probe for ProtonMail-linked identities
+  [K]  LinkedIn2Username email pattern generation from confirmed names
+
+2.3 OUT OF SCOPE (documented, not built)
+  [ ]  Residential proxy pools
+  [ ]  Per-platform deep dive requiring paid API keys
+  [ ]  Calibration engine
+  [ ]  Full React + D3.js UI
+  [ ]  HashiCorp Vault (use python-dotenv)
+  [ ]  Prometheus / Grafana
+  [ ]  Live court / public records integration
+
+2.4 SUCCESS CRITERIA FOR JUDGES
+  The demo must show:
+    - Live pipeline run from a single seed to a complete identity report
+    - At least 5 platforms with confirmed linked accounts
+    - 3+ tool categories firing (username, email, platform-specific)
+    - Confidence scores with signal breakdowns visible
+    - Evidence preserved (screenshot shown, hash displayed)
+    - Wayback Machine archive link visible per hit
+    - Report generated and downloadable
+    - The real-world impact story delivered in < 2 minutes
+
+
+================================================================================
+3. UPGRADED FREE TOOL STACK (v2.0)
+================================================================================
+
+3.1 USERNAME & SOCIAL DISCOVERY TOOLS
++------------------------+----------+------------------------------------------+
+| Tool                   | Install  | What it does                             |
++------------------------+----------+------------------------------------------+
+| Sherlock               | pip      | Username search across 400+ sites        |
+| Maigret                | pip      | Username search across 600+ sites,       |
+|                        |          | structured JSON output                   |
+| Blackbird              | git      | Fast username + email discovery          |
+| WhatsMyName-Python     | pip/git  | CLI WhatsMyName project, username        |
+|                        |          | footprinting across 600+ sites           |
+| Nexfil                 | pip/git  | Username search across many services,    |
+|                        |          | identifies likely matching accounts      |
+| Social-Analyzer        | pip      | Wide social-media account checking,      |
+|                        |          | structured output with metadata          |
+| Tracer                 | git      | Finds linked identities and account      |
+|                        |          | reuse across platforms                   |
+| Enola                  | go bin   | Go-based username search utility,        |
+|                        |          | fast alias checking across services      |
+| DetectDee              | go bin   | Social OSINT for locating people across  |
+|                        |          | public platforms                         |
++------------------------+----------+------------------------------------------+
+
+USERNAME FALLBACK CHAIN (run all in parallel, merge + deduplicate):
+  PRIMARY:   Sherlock + Maigret + Blackbird + WhatsMyName
+  SECONDARY: Nexfil + Social-Analyzer + Enola + DetectDee
+  TIEBREAK:  Tracer (runs on confirmed hits to find reuse patterns)
+
+3.2 EMAIL & ACCOUNT DISCOVERY TOOLS
++------------------------+----------+------------------------------------------+
+| Tool                   | Install  | What it does                             |
++------------------------+----------+------------------------------------------+
+| Holehe                 | pip      | Email registered on 120+ services,       |
+|                        |          | password reset probing                   |
+| H8mail                 | pip      | Breach data correlation, free tier       |
+| Zehef                  | git      | Email registered on 18 social media      |
+|                        |          | sites + basic breach check               |
+| Mailsleuth             | go bin   | Email account presence on many services  |
+| Mailcat                | pip/git  | Usernames + accounts attached to email   |
+|                        |          | address or domain                        |
+| Ghunt                  | pip      | Extracts Google account info from email: |
+|                        |          | profile, maps, reviews, calendars        |
+| Hashtray               | pip/git  | Email or username → Gravatar profile     |
+|                        |          | correlation                              |
+| Eyes                   | pip/git  | Advanced email recon for social media    |
+|                        |          | presence data                            |
+| SocialScan             | pip      | Checks username or email taken on        |
+|                        |          | popular services                         |
+| Email2WhatsApp         | go bin   | Connects email to WhatsApp-related       |
+|                        |          | account evidence                         |
++------------------------+----------+------------------------------------------+
+
+EMAIL FALLBACK CHAIN:
+  PRIMARY:   Holehe + H8mail + Zehef
+  SECONDARY: Mailsleuth + Mailcat + Eyes + SocialScan
+  SPECIAL:   Ghunt (Google accounts only) + Hashtray (Gravatar)
+             Email2WhatsApp (WhatsApp linkage probe — bonus)
+
+3.3 DOMAIN, WEB & NETWORK RECON TOOLS
+  NOTE: These fire when a personal site, blog, or business domain is
+  discovered as a linked account during enumeration. Not part of the
+  initial seed sweep — triggered by hits.
+
++------------------------+----------+------------------------------------------+
+| Tool                   | Install  | What it does                             |
++------------------------+----------+------------------------------------------+
+| TheHarvester           | pip      | Names, emails, hosts, subdomains, URLs   |
+|                        |          | from public sources                      |
+| FinalRecon             | pip      | All-in-one website recon: headers,       |
+|                        |          | WHOIS, DNS, SSL, crawl                   |
+| Subcat                 | pip      | Passive subdomain discovery from         |
+|                        |          | multiple data sources                    |
+| Spiderfoot             | pip      | Automates OSINT checks against domains,  |
+|                        |          | IPs, names, and accounts                 |
+| GitHound               | go bin   | Searches GitHub repos for exposed        |
+|                        |          | secrets and sensitive strings            |
+| Webdiver               | pip      | Extracts website info from CLI           |
+| Nmap                   | system   | Port scan — run gently, confirm exposure |
++------------------------+----------+------------------------------------------+
+
+DOMAIN RECON TRIGGER:
+  Fires only when a personal domain or GitHub profile is found.
+  TheHarvester + FinalRecon run first.
+  GitHound runs if a GitHub account is confirmed.
+
+3.4 SEARCHING, DORKING & ARCHIVE TOOLS
++------------------------+----------+------------------------------------------+
+| Tool                   | Install  | What it does                             |
++------------------------+----------+------------------------------------------+
+| Dorks Eye              | pip/git  | Automates Google dorking queries on      |
+|                        |          | seed username or email                   |
+| Dorksint               | pip/git  | Quick dork-based info pull on a query    |
+| WayBack URLS           | pip      | Historical URLs for a domain from        |
+|                        |          | Internet Archive                         |
+| WayBackPack            | pip/git  | Downloads archived pages and files       |
+|                        |          | from Wayback Machine                     |
+| The Time Machine       | git      | Investigates historical snapshots for    |
+|                        |          | past exposed content                     |
+| HuntPastebin           | pip/git  | Searches Pastebin-style content for      |
+|                        |          | leaks matching a target query            |
++------------------------+----------+------------------------------------------+
+
+ARCHIVE CHAIN:
+  Every positive hit URL → WayBack URLS (historical exposure check)
+  Preservation backup → Wayback Machine save request + WayBackPack
+  On confirmed identity: The Time Machine → scan for past content
+  Pastebin sweep: HuntPastebin fires once per case on seed value
+
+DORKING CHAIN (runs passively in background):
+  Dorks Eye → Dorksint
+  Target: seed email, seed username, and any confirmed real name
+  Rate limit: max 10 queries per run, 30s intervals, Tor-routed
+
+3.5 PLATFORM-SPECIFIC TOOLS
+  NOTE: These fire ONLY on confirmed identity links (HIGH/MEDIUM confidence),
+  not on initial sweep. They are secondary enrichment tools.
+
++------------------------+----------+------------------------------------------+
+| Tool                   | Install  | What it does                             |
++------------------------+----------+------------------------------------------+
+| Toutatis               | pip      | Instagram metadata: followers, bio,      |
+|                        |          | contact info (requires session token)    |
+| Medor                  | pip/git  | Instagram account + email recon          |
+| SnapIntel              | pip/git  | Snapchat username lookup + account info  |
+| Geogramint             | pip/git  | Telegram phone-number + account          |
+|                        |          | correlation                              |
+| TeleGramSint           | pip/git  | Telegram user/channel data extraction   |
+| TikTok UserData        | pip/git  | TikTok username metadata + public        |
+|                        |          | profile details                          |
+| MastOSINT              | pip/git  | Mastodon profile, post, federated        |
+|                        |          | social activity search                   |
+| OSINTSky               | pip/git  | Bluesky investigation via free API       |
+| OSINTChan              | pip/git  | 4chan thread, post, and activity query   |
+| Proton Intelligence    | pip/git  | Limited OSINT on ProtonMail addresses    |
+| LinkedIn2Username      | pip      | Candidate username + email patterns      |
+|                        |          | from LinkedIn name data                  |
++------------------------+----------+------------------------------------------+
+
+PLATFORM TOOL TRIGGER MATRIX:
+  Instagram confirmed  → Toutatis + Medor
+  Snapchat confirmed   → SnapIntel
+  Telegram confirmed   → Geogramint + TeleGramSint
+  TikTok confirmed     → TikTok UserData
+  Mastodon confirmed   → MastOSINT
+  Bluesky confirmed    → OSINTSky
+  4chan confirmed      → OSINTChan
+  ProtonMail confirmed → Proton Intelligence
+  LinkedIn confirmed   → LinkedIn2Username
+  All confirmed hits   → GoWitness screenshot + Wayback preservation
+
+3.6 INFRASTRUCTURE (all free, Docker — unchanged from v1.0)
++----------------------+---------------------------+---------------------------+
+| Component            | Technology                | Free?                     |
++----------------------+---------------------------+---------------------------+
+| Orchestration        | Python 3.11 + asyncio     | Yes                       |
+| Task Queue           | Celery + Redis            | Yes (Docker)              |
+| Relational DB        | PostgreSQL 15             | Yes (Docker)              |
+| Semantic Store       | pgvector extension        | Yes (PG extension)        |
+| Identity Graph       | Neo4j Community Edition   | Yes (Docker)              |
+| Object Storage       | MinIO                     | Yes (Docker)              |
+| API Gateway          | FastAPI                   | Yes (pip)                 |
+| Dashboard            | Streamlit                 | Yes (pip)                 |
+| NLP / Embeddings     | spaCy + sentence-         | Yes (pip)                 |
+|                      | transformers              |                           |
+| Image Hashing        | imagehash (pHash)         | Yes (pip)                 |
+| Secrets              | python-dotenv             | Yes (pip)                 |
+| Containerisation     | Docker + Docker Compose   | Yes                       |
++----------------------+---------------------------+---------------------------+
+
+3.7 PROXY STRATEGY (free only)
+  Tier A (high-sensitivity):  Tor via stem + requests[socks]
+  Tier B (medium):            Direct egress (controlled IP)
+  NOTE: Dorking tools MUST use Tor (GoTOR) to avoid Google blocks.
+        Platform-specific tools use Tor where supported.
+        No residential proxy pool in hackathon scope.
+        If platform blocks occur during demo, show cached results.
+
+3.8 PYTHON DEPENDENCIES (requirements.txt — v2.0)
+  # Core framework
+  fastapi
+  uvicorn
+  celery
+  redis
+  psycopg2-binary
+  neo4j
+  minio
+  python-dotenv
+  httpx
+  aiofiles
+  pydantic
+  reportlab
+
+  # Username tools
+  sherlock-project
+  maigret
+  social-analyzer
+
+  # Email tools
+  holehe
+  h8mail
+  ghunt
+
+  # NLP / similarity
+  spacy
+  sentence-transformers
+  langdetect
+  python-Levenshtein
+
+  # Imaging
+  imagehash
+  Pillow
+
+  # Visualisation
+  streamlit
+  plotly
+  networkx
+
+  # Archiving
+  waybackpy
+
+  # Go binaries (install separately, not pip):
+  #   enola, detectdee, mailsleuth, email2whatsapp, gowitness,
+  #   subfinder, katana, githound, go-crawler, gotor, dorkscout
+
+
+================================================================================
+4. SYSTEM ARCHITECTURE (HACKATHON EDITION v2.0)
+================================================================================
+
+HIGH-LEVEL FLOW:
+
+  [Analyst Input]
+       |
+       v
+  [Legal Gate] ──── Missing fields? ──→ HALT
+       |
+       v
+  [Seed Normaliser] → case_id + run_id issued
+       |
+       v
+  ┌──────────────────────────────────────────────────┐
+  │              TOOL EXECUTOR v2.0                  │
+  │         (asyncio parallel dispatch)              │
+  │                                                  │
+  │  TIER 1 — FAST SWEEP (fires first, ~30-60s)      │
+  │  Username: Blackbird + WhatsMyName               │
+  │  Email:    Zehef + SocialScan + Hashtray         │
+  │                                                  │
+  │  TIER 2 — DEEP SWEEP (fires in parallel, 2-20m)  │
+  │  Username: Sherlock + Maigret + Nexfil           │
+  │            Social-Analyzer + Tracer              │
+  │  Email:    Holehe + H8mail + Mailcat             │
+  │            Eyes + Mailsleuth + Ghunt             │
+  │  Go tools: Enola + DetectDee + Email2WhatsApp    │
+  │                                                  │
+  │  TIER 3 — PASSIVE RECON (runs in background)     │
+  │  Dorking:  Dorks Eye + Dorksint (Tor-routed)     │
+  │  Archives: WayBack URLS + HuntPastebin           │
+  │                                                  │
+  │  TIER 4 — TRIGGERED ON CONFIRMED HITS ONLY       │
+  │  Domain:   TheHarvester + FinalRecon + GitHound  │
+  │  Platform: Toutatis / SnapIntel / TeleGramSint   │
+  │            TikTok UserData / OSINTSky / OSINTChan│
+  │            MastOSINT / Proton Intelligence       │
+  │  Archive:  WayBackPack + The Time Machine        │
+  └──────────┬───────────────────┬───────────────────┘
+             │                   │
+             v                   v
+  [Preservation Service]    [FallbackChainManager]
+  (screenshot + hash         (skips broken tools,
+   + MinIO store             logs CHAIN_EXHAUSTED)
+   + Wayback save)
+             │
+             v
+  [Data Normaliser]
+  (parse → EvidenceUnit → deduplicate → PostgreSQL)
+             │
+             v
+  [Correlation Engine v2.0]
+  (weighted signals + new signal types + 2-signal rule
+   + pgvector bio similarity + Gravatar bonus)
+             │
+             v
+  [Graph Builder] → Neo4j identity graph
+             │
+  ┌──────────┴─────────┐
+  v                    v
+[Streamlit UI]     [Report Generator]
+(live graph,       (JSON + PDF output,
+ review queue,      SHA-256 signed bundle,
+ tool status)       platform enrichment)
+
+
+CONTAINERISATION (Docker Compose):
+  Container 1:  postgres + pgvector
+  Container 2:  neo4j
+  Container 3:  redis
+  Container 4:  minio
+  Container 5:  celery worker — Tier 1 & 2 tools (Python-based)
+  Container 6:  celery worker — Tier 3 & 4 tools (Go binaries + subprocess)
+  Container 7:  fastapi (api gateway)
+  Container 8:  streamlit (analyst UI)
+  NOTE: Each tool runs in an isolated venv inside its container to
+        prevent dependency conflicts (Sherlock and Maigret can conflict,
+        Ghunt has its own dependency tree).
+  NOTE: Go binaries are pre-compiled and mounted into Container 6.
+        Tor daemon runs inside Container 6 for Tier 3 tools.
+
+
+================================================================================
+5. MODULE BREAKDOWN
+================================================================================
+
+MODULE 0: EVIDENCE SCHEMA & PROVENANCE SERVICE
+  Build this first. Everything else produces or consumes this schema.
+
+  EvidenceUnit:
+    evidence_id          : UUID (auto-generated)
+    case_id              : str  (from Legal Gate)
+    run_id               : str  (from Seed Manager)
+    tool_name            : str  (e.g. "sherlock", "ghunt", "tiktok_userdata")
+    tool_version         : str
+    tool_tier            : int  (1=fast sweep, 2=deep, 3=passive, 4=triggered)
+    source_platform      : str  (e.g. "twitter", "github", "tiktok")
+    source_tier          : int  (1=API, 2=public web, 3=archive, 4=inferred)
+    seed_type            : str  ("username" | "email" | "phone")
+    seed_value           : str
+    result_type          : str  ("account_found" | "email_registered" |
+                                 "breach_hit" | "gravatar_hit" | "google_hit" |
+                                 "whatsapp_hit" | "domain_hit" | "dork_hit" |
+                                 "archive_hit" | "unavailable" | "blocked")
+    result_value         : str  (URL, username, email, etc.)
+    confidence_raw       : float
+    signal_weights       : dict (breakdown of contributing signals)
+    timestamp_collected  : datetime (UTC)
+    timestamp_preserved  : datetime (UTC)
+    snapshot_ref         : str  (MinIO object path)
+    snapshot_hash        : str  (SHA-256 of preserved artifact)
+    wayback_ref          : str  (Wayback Machine archive URL if saved)
+    platform_enrichment  : dict (Tier 4 tool output, if run)
+    analyst_id           : str
+    notes                : str
+
+  ProvenanceService methods:
+    create_evidence_unit(data)     → EvidenceUnit
+    validate_schema(unit)          → bool
+    write_to_db(unit)              → UUID
+    compute_hash(artifact_bytes)   → str
+    log_audit_event(type, actor)   → None
+    attach_enrichment(id, data)    → None
+
+
+MODULE 1: LEGAL GATE & SEED MANAGER
+  Unchanged from v1.0. Validates mandatory fields before any tool fires.
+  Normalises the seed input. Issues case_id and run_id.
+  Writes intake record to audit log.
+
+  Required fields (analyst must provide all):
+    authority_id         : Authorisation reference number
+    agency_id            : Agency/organisation identifier
+    analyst_id           : Analyst identifier
+    supervisor_approval  : Boolean — supervisor signed off
+    purpose_statement    : Free text — why collection is authorised
+    target_category      : "cybercrime" | "fraud" | "harassment" | "research"
+    jurisdiction         : Country/region code
+    retention_period     : Days
+    seed_type            : "username" | "email" | "phone"
+    seed_value           : The actual seed
+
+  Normalisation rules:
+    Username: lowercase, strip @prefix, strip whitespace
+    Email:    lowercase, strip whitespace, validate format
+    Phone:    E.164 format normalisation
+
+
+MODULE 2: TOOLADAPTER FRAMEWORK (expanded v2.0)
+  Abstract base class every tool wraps.
+  Enables health checks, fallback chains, and graceful degradation.
+  Now manages 4 tool tiers and platform trigger matrix.
+
+  ToolAdapter interface (unchanged):
+    name()           → str
+    version()        → str
+    health_check()   → bool
+    run(seed)        → list[RawResult]
+    parse(raw)       → list[EvidenceUnit]
+    get_proxy_tier() → int
+    get_tool_tier()  → int    (NEW: 1-4 as defined above)
+
+  FallbackChainManager (v2.0):
+    chains = {
+      "username_tier1": [BlackbirdAdapter, WhatsMyNameAdapter],
+      "username_tier2": [SherlockAdapter, MaigretAdapter, NexfilAdapter,
+                         SocialAnalyzerAdapter, TracerAdapter,
+                         EnolaAdapter, DetectDeeAdapter],
+      "email_tier1":    [ZehefAdapter, SocialScanAdapter, HashtrayAdapter],
+      "email_tier2":    [HoleheAdapter, H8mailAdapter, MailcatAdapter,
+                         EyesAdapter, MailsleuthAdapter, GhuntAdapter,
+                         Email2WhatsAppAdapter],
+      "passive_recon":  [DorksEyeAdapter, DorksintAdapter,
+                         WayBackURLsAdapter, HuntPastebinAdapter],
+    }
+    execute_chain(seed_type, seed_value, tier) → list[EvidenceUnit]
+    trigger_platform_tools(platform, account_url) → list[EvidenceUnit]
+    trigger_domain_tools(domain) → list[EvidenceUnit]
+
+  Platform trigger map (auto-fires on confirmed hit):
+    "instagram"  : [ToutatisAdapter, MedorAdapter]
+    "snapchat"   : [SnapIntelAdapter]
+    "telegram"   : [GeogramintAdapter, TeleGramSintAdapter]
+    "tiktok"     : [TikTokUserDataAdapter]
+    "mastodon"   : [MastOSINTAdapter]
+    "bluesky"    : [OSINTSkyAdapter]
+    "4chan"       : [OSINTChanAdapter]
+    "protonmail" : [ProtonIntelAdapter]
+    "linkedin"   : [LinkedIn2UsernameAdapter]
+    "github"     : [GitHoundAdapter]
+    "domain"     : [TheHarvesterAdapter, FinalReconAdapter, WebdiverAdapter]
+
+  Adapters to implement (Weeks 2-3):
+    Week 2: All Tier 1 + Tier 2 adapters (username + email chains)
+    Week 3: Tier 3 passive adapters + priority Tier 4 platforms
+            (TikTok, Telegram, Snapchat are highest impact for judges)
+
+
+MODULE 3: TOOL EXECUTOR (v2.0)
+  Async parallel execution in 4 tiers.
+  Tier 1 fires first; Tier 2 fires in parallel with Tier 1.
+  Tier 3 fires in background from case start (non-blocking).
+  Tier 4 fires only when a confirmed platform hit arrives.
+
+  Celery task groups:
+    group_tier1  = group(run_tier1_tools.s(seed))
+    group_tier2  = group(run_tier2_tools.s(seed))
+    group_tier3  = group(run_passive_tools.s(seed))
+    chord([group_tier1, group_tier2], aggregate_results.s())
+
+  Rate limit config (per tool, config.yaml):
+    sherlock:        cool_down_seconds: 5
+    maigret:         cool_down_seconds: 5
+    holehe:          cool_down_seconds: 10
+    h8mail:          cool_down_seconds: 5
+    ghunt:           cool_down_seconds: 15  (Google rate-sensitive)
+    whatsMyName:     cool_down_seconds: 5
+    nexfil:          cool_down_seconds: 5
+    social_analyzer: cool_down_seconds: 8
+    dorks_eye:       cool_down_seconds: 30  (Google — use Tor)
+    dorksint:        cool_down_seconds: 30  (Google — use Tor)
+    toutatis:        cool_down_seconds: 20  (Instagram — rate-sensitive)
+    telegram_tools:  cool_down_seconds: 10
+    tiktok:          cool_down_seconds: 15
+
+  Execution audit fields (same as v1.0):
+    run_id, tool_name, tool_tier, seed_type, seed_value,
+    started_at, completed_at, status, result_count, error_message
+
+
+MODULE 4: PRESERVATION SERVICE (v2.0)
+  On every positive hit:
+    1. Fetch full HTML of the profile URL (httpx)
+    2. Store raw HTML to MinIO: cases/{case_id}/{evidence_id}/raw.html
+    3. Compute SHA-256 hash of stored artifact
+    4. Take GoWitness screenshot if URL is web-accessible
+    5. Store screenshot to MinIO: cases/{case_id}/{evidence_id}/screenshot.png
+    6. Submit Wayback Machine save request (free CDX API)
+    7. WayBackPack: download archived version if URL has prior snapshots
+    8. Return snapshot_ref, snapshot_hash, and wayback_ref to executor
+
+  IMPORTANT: Preservation runs BEFORE EvidenceUnit is written to DB.
+  If preservation fails: log warning, continue (don't drop the evidence).
+
+  MinIO bucket structure (v2.0):
+    socmint-evidence/
+      cases/
+        {case_id}/
+          {evidence_id}/
+            raw.html
+            screenshot.png
+            tool_stdout.txt
+            wayback_snapshot.html   (if WayBackPack retrieval succeeded)
+            enrichment.json         (Tier 4 platform tool output)
+
+
+MODULE 5: DATA NORMALISER
+  Unchanged from v1.0 with one addition:
+  Now tags each EvidenceUnit with tool_tier for pipeline tracking.
+  Deduplication key: (source_platform, result_value, seed_value)
+  All other normalisation, decay, and pgvector logic unchanged.
+
+
+MODULE 6: CORRELATION ENGINE (see Section 9 for full scoring model)
+  Loads all EvidenceUnits for current run.
+  Groups by source_platform.
+  Computes pairwise identity link scores across platforms.
+  Enforces 2-signal minimum rule.
+  Writes identity links to Neo4j.
+  Flags HIGH confidence links (75+) for analyst review.
+  NEW: Gravatar hit adds bonus signal weight (see Section 9).
+  NEW: Google account hit adds bonus signal weight (see Section 9).
+  NEW: WhatsApp linkage adds bonus signal weight (see Section 9).
+  NEW: Dork hit adds corroboration signal for confirmed names.
+
+
+MODULE 7: GRAPH BUILDER
+  Node types (v2.0 — expanded):
+    Identity  — the subject being investigated
+    Account   — a discovered account on a platform
+    Email     — an email address
+    Username  — a normalised username
+    Phone     — a phone number (if seed or discovered)
+    Domain    — a personal website or GitHub domain
+
+  Edge types (v2.0 — expanded):
+    LINKED_TO   — identity link with confidence score
+    USES        — Identity USES Account
+    HAS_EMAIL   — Account HAS_EMAIL Email
+    SAME_AS     — Account SAME_AS Account (with signal breakdown)
+    OWNS_DOMAIN — Identity OWNS_DOMAIN Domain
+    LINKED_PHONE— Account LINKED_PHONE Phone
+    REUSES_CRED — Account REUSES_CRED Account (breach corroboration)
+
+  Graph queries (same as v1.0 plus):
+    All domains owned by identity
+    Phone-linked accounts
+    Breach credential reuse cluster
+
+
+MODULE 8: STREAMLIT ANALYST DASHBOARD (v2.0)
+  Page 1: Case Intake
+    Form with all required legal gate fields
+    Seed input (username, email, or phone)
+    Submit button → triggers pipeline
+
+  Page 2: Live Pipeline Status (v2.0 — enhanced)
+    Per-TIER status panel (Tier 1 / 2 / 3 / 4)
+    Per-tool status: running / done / failed / skipped
+    Real-time hit counter as results come in
+    "Preservation complete" indicator per hit
+    Platform enrichment queue: shows which Tier 4 tools are pending
+
+  Page 3: Identity Graph
+    Plotly/NetworkX interactive graph
+    Nodes: accounts coloured by platform
+    Edges: identity links coloured by confidence
+    Domain nodes shown as rectangles
+    Click node: full evidence panel including enrichment data
+
+  Page 4: Review Queue
+    List of HIGH confidence links (75+) awaiting analyst confirmation
+    Per-link panel:
+      - Signal breakdown (which signals contributed, weights)
+      - Snapshot preview (screenshot thumbnail)
+      - Wayback archive link (if available)
+      - Platform enrichment summary (Tier 4 data if available)
+      - SHA-256 hash displayed
+      - CONFIRM / REJECT / FLAG-UNCERTAIN buttons
+      - Mandatory note field
+    All decisions written to immutable audit log
+
+  Page 5: Report
+    Generate button → triggers Report Generator
+    Download JSON evidence package
+    Download PDF summary report
+
+
+MODULE 9: REPORT GENERATOR
+  Assembles:
+    - All confirmed identity links with signal breakdowns
+    - Evidence chain per link (which tools, which tiers, which signals)
+    - Confidence scores with calibration notes
+    - Preservation references (MinIO paths + SHA-256 hashes)
+    - Wayback Machine archive references per hit
+    - Platform enrichment data (Tier 4 tool output)
+    - Analyst annotations and confirmation timestamps
+    - Full audit log summary
+
+  Outputs:
+    {case_id}_report.json    — machine-readable evidence package
+    {case_id}_report.pdf     — human-readable PDF (ReportLab)
+    {case_id}_graph.png      — graph visualisation export
+    {case_id}_bundle.sha256  — hash of all above files combined
+
+
+================================================================================
+6. 4-WEEK IMPLEMENTATION ROADMAP
+================================================================================
+
+WEEK 1: FOUNDATION (Days 1-7)
+  Goal: Infrastructure up, schema locked, Tier 1 tools integrated
+
+  Day 1-2: Infrastructure
+    - docker-compose.yml with all 8 containers
+    - PostgreSQL schema created (cases, evidence_units, identity_links,
+      audit_log tables)
+    - Neo4j running, basic node/edge schema designed
+    - MinIO bucket created
+    - Redis + Celery worker verified
+    - .env file with all variables, git-ignored
+
+  Day 3-4: Core Modules
+    - MODULE 0: EvidenceUnit schema + ProvenanceService coded and tested
+    - MODULE 1: Legal Gate coded and tested (all 10 required fields)
+    - MODULE 2: ToolAdapter base class + FallbackChainManager skeleton
+
+  Day 5-6: Tier 1 Tool Adapters
+    - BlackbirdAdapter (fastest — verifies pipeline works end-to-end)
+    - WhatsMyNameAdapter
+    - ZehefAdapter
+    - SocialScanAdapter
+    - HashtrayAdapter
+    - Verify: seed → Tier 1 tools → EvidenceUnit → PostgreSQL
+
+  Day 7: Buffer + Integration Test
+    - Run full Tier 1 pipeline on a test username
+    - Verify EvidenceUnit schema in DB
+    - Verify audit log entries created
+    - Fix any integration issues
+    - Define FastAPI endpoint contracts for all module handoffs
+
+  WEEK 1 DELIVERABLE:
+    Legal gate + Tier 1 tools + preservation + DB writes all working.
+
+WEEK 2: DEEP ENUMERATION (Days 8-14)
+  Goal: All Tier 2 tools integrated, correlation engine running
+
+  Day 8-9: Tier 2 Username Adapters
+    - SherlockAdapter
+    - MaigretAdapter
+    - NexfilAdapter
+    - SocialAnalyzerAdapter
+    - EnolaAdapter (Go binary subprocess)
+    - DetectDeeAdapter (Go binary subprocess)
+    - TracerAdapter
+
+  Day 10-11: Tier 2 Email Adapters
+    - HoleheAdapter
+    - H8mailAdapter
+    - MailcatAdapter
+    - EyesAdapter
+    - MailsleuthAdapter (Go binary)
+    - GhuntAdapter (isolated venv — dependency conflicts)
+    - Email2WhatsAppAdapter (Go binary)
+
+  Day 12-13: Correlation Engine
+    - MODULE 6: Full scoring model implemented (Section 9)
+    - All signal weights coded
+    - All conflict penalties coded
+    - Evidence decay formula implemented
+    - 2-signal rule enforced
+    - Leet-speak normalisation implemented
+    - Neo4j graph writes on every scored link
+
+  Day 14: Buffer + Integration Test
+    - Full Tier 1 + Tier 2 pipeline on test case
+    - Verify correlation scores match expected signal weights
+    - Verify Neo4j graph has correct node/edge structure
+    - Fix integration issues
+
+  WEEK 2 DELIVERABLE:
+    Full username + email sweep working. Correlation scoring. Graph built.
+
+WEEK 3: ENRICHMENT & PLATFORM TOOLS (Days 15-21)
+  Goal: Tier 3 + Tier 4 tools, Streamlit dashboard functional
+
+  Day 15-16: Tier 3 Passive Recon
+    - DorksEyeAdapter (Tor-routed via GoTOR)
+    - DorksintAdapter
+    - WayBackURLsAdapter (waybackpy)
+    - HuntPastebinAdapter
+    - Preservation update: WayBackPack integration
+
+  Day 17-18: Priority Tier 4 Platform Tools
+    - SnapIntelAdapter (high demo impact)
+    - TeleGramSintAdapter (high demo impact)
+    - GeogramintAdapter
+    - TikTokUserDataAdapter (high demo impact)
+    - GitHoundAdapter (Go binary)
+
+  Day 19: Secondary Tier 4 Platform Tools
+    - MastOSINTAdapter
+    - OSINTSkyAdapter
+    - OSINTChanAdapter
+    - ProtonIntelAdapter
+    - LinkedIn2UsernameAdapter
+    - TheHarvesterAdapter + FinalReconAdapter (domain trigger)
+
+  Day 20-21: Streamlit Dashboard
+    - Page 1: Case Intake form (connects to FastAPI)
+    - Page 2: Live pipeline status with tier panels
+    - Page 3: Identity graph (NetworkX + Plotly)
+    - Page 4: Review queue with CONFIRM/REJECT buttons
+    - Page 5: Report download (JSON + PDF)
+
+  WEEK 3 DELIVERABLE:
+    All 35+ tools integrated. Dashboard functional. Platform enrichment
+    firing on confirmed hits. Ready for demo case dry run.
+
+WEEK 4: POLISH, DEMO PREP, RISK MITIGATION (Days 22-28)
+  Goal: Polished demo, all risks mitigated, judges impressed
+
+  Day 22-23: Report Generator + Audit
+    - MODULE 9: Full PDF report generation (ReportLab)
+    - JSON evidence package with complete provenance
+    - SHA-256 bundle signing
+    - Audit log completeness check
+
+  Day 24-25: End-to-End Demo Case
+    - Run full pipeline on chosen demo target (known public figure
+      with multiple confirmed social accounts)
+    - Verify all 4 tiers fire correctly
+    - Verify at least 5 confirmed linked accounts
+    - Verify platform enrichment fires on correct triggers
+    - Verify report generates cleanly
+    - Cache results in PostgreSQL as fallback
+
+  Day 26: Bug Fixes + Performance
+    - Fix any issues found in Day 24-25 run
+    - Optimise slowest tool chains
+    - Ensure Streamlit dashboard renders graph smoothly
+    - Confirm FallbackChainManager handles broken tools gracefully
+
+  Day 27: Demo Script Rehearsal
+    - Full demo rehearsal (see Section 13)
+    - Time the run: target < 60 minutes end-to-end
+    - Prepare judge Q&A talking points
+    - Confirm all team members know their parts
+
+  Day 28: Final Buffer
+    - Final fixes only
+    - Freeze code (no new features)
+    - Test on clean machine / judge's OS
+    - Have backup laptop with stack pre-running
+
+  WEEK 4 DELIVERABLE:
+    Polished, rehearsed, cached demo. Report downloadable. Judges wowed.
+
+
+================================================================================
+7. TEAM SPLIT & OWNERSHIP
+================================================================================
+
+  Person A — Infrastructure + Core Pipeline
+    Owns: Docker Compose, PostgreSQL schema, Redis/Celery, MinIO
+    Owns: MODULE 0 (Evidence Schema), MODULE 1 (Legal Gate)
+    Owns: MODULE 4 (Preservation Service)
+    Owns: FastAPI endpoint definitions (contracts only — other team
+          members implement logic against defined endpoints)
+
+  Person B — Tool Adapters (Python tools)
+    Owns: MODULE 2 (ToolAdapter base class + FallbackChainManager)
+    Owns: MODULE 3 (Tool Executor)
+    Owns: All Python-based Tier 1 + Tier 2 adapters
+          (Sherlock, Maigret, Holehe, H8mail, Blackbird, WhatsMyName,
+           Nexfil, Social-Analyzer, Zehef, Mailcat, Eyes, SocialScan,
+           Ghunt, Hashtray, Tracer)
+
+  Person C — Tool Adapters (Go tools + Tier 3 + Tier 4)
+    Owns: All Go-binary adapters
+          (Enola, DetectDee, Mailsleuth, Email2WhatsApp, GoWitness,
+           GitHound)
+    Owns: Tier 3 passive adapters (Dorks Eye, Dorksint, HuntPastebin,
+          WayBackURLs, WayBackPack, The Time Machine)
+    Owns: Tier 4 platform adapters
+          (Toutatis, Medor, SnapIntel, Geogramint, TeleGramSint,
+           TikTok UserData, MastOSINT, OSINTSky, OSINTChan,
+           Proton Intelligence, LinkedIn2Username, TheHarvester,
+           FinalRecon)
+
+  Person D — Correlation + Dashboard + Report
+    Owns: MODULE 5 (Data Normaliser)
+    Owns: MODULE 6 (Correlation Engine) — see Section 9
+    Owns: MODULE 7 (Graph Builder) + Neo4j integration
+    Owns: MODULE 8 (Streamlit Dashboard — all 5 pages)
+    Owns: MODULE 9 (Report Generator — JSON + PDF)
+
+  INTEGRATION RULE:
+    Each person owns their module's FastAPI endpoint.
+    Others call it — they don't touch the implementation.
+    Daily 15-minute standups from Day 8 onward.
+    Merge to main only after a passing integration test.
+
+
+================================================================================
+8. END-TO-END PIPELINE WORKFLOW
+================================================================================
+
+STEP 0: PRE-RUN SETUP (one-time, done in Week 1)
+  docker compose up -d
+  All 8 services healthy
+  All ToolAdapters registered and health-checked via /health endpoint
+  Legal gate enforced — no pipeline starts without passing validation
+
+STEP 1: LEGAL GATE & TRIAGE (0-2 minutes)
+  Analyst submits case intake form in Streamlit (Page 1)
+  FastAPI /api/v1/cases/create called with all mandatory fields
+  Legal Gate validates — rejects if any mandatory field missing
+  Seed normalised (lowercase, format-validated)
+  case_id and run_id issued, intake record written to audit log
+  Tier 1 tools fire immediately (Blackbird, WhatsMyName, Zehef, Hashtray)
+  Initial hits displayed to analyst within 1-2 minutes
+
+STEP 2: DEEP ENUMERATION (2-30 minutes)
+  Tier 2 tools fire in parallel via Celery task groups:
+    Username sweep: Sherlock + Maigret + Nexfil + Social-Analyzer
+                    + Tracer + Enola + DetectDee
+    Email sweep:    Holehe + H8mail + Mailcat + Eyes + Mailsleuth
+                    + Ghunt + Email2WhatsApp
+  Tier 3 passive tools fire in background (non-blocking):
+    Dorks Eye + Dorksint (Tor-routed)
+    WayBack URLS + HuntPastebin
+  For every positive hit as it arrives:
+    Preservation Service triggered immediately:
+      Screenshot via GoWitness
+      Raw HTML stored to MinIO with SHA-256 hash
+      Wayback Machine save request submitted
+      WayBackPack archive pull if prior snapshots exist
+  Streamlit Page 2 updates in real-time
+
+STEP 3: NORMALISATION (concurrent with Step 2)
+  Each tool output → ToolAdapter.parse() → EvidenceUnit
+  Source tier + tool tier assigned per tool
+  Evidence age calculated, decay factor computed
+  Deduplication across tool outputs
+  EvidenceUnits written to PostgreSQL with full provenance
+
+STEP 4: CORRELATION & GRAPH (triggers after each batch of results)
+  Correlation Engine loads latest evidence batch
+  All signal weights computed (see Section 9)
+  Gravatar hits, Google hits, WhatsApp hits applied as bonus signals
+  Dork hits used as corroboration signals for confirmed names
+  Conflict penalties applied
+  2-signal rule enforced
+  Confidence score computed: HIGH / MEDIUM / LOW / DISCARD
+  Neo4j graph updated with new nodes and edges
+  HIGH confidence links pushed to analyst review queue
+
+STEP 5: PLATFORM ENRICHMENT (runs as HIGH/MEDIUM links are confirmed)
+  Platform trigger matrix fires per confirmed platform:
+    Instagram confirmed  → Toutatis + Medor
+    Snapchat confirmed   → SnapIntel
+    Telegram confirmed   → Geogramint + TeleGramSint
+    TikTok confirmed     → TikTok UserData
+    Mastodon confirmed   → MastOSINT
+    Bluesky confirmed    → OSINTSky
+    4chan confirmed       → OSINTChan
+    ProtonMail confirmed → Proton Intelligence
+    LinkedIn confirmed   → LinkedIn2Username
+    GitHub confirmed     → GitHound
+    Domain confirmed     → TheHarvester + FinalRecon
+  Enrichment data stored in evidence_units.platform_enrichment JSONB field
+  Screenshot + Wayback preservation run on all enrichment hits
+
+STEP 6: ANALYST REVIEW
+  Analyst opens Page 4 (Review Queue) in Streamlit
+  HIGH confidence links shown with full evidence breakdown + enrichment
+  Analyst clicks CONFIRM / REJECT / FLAG-UNCERTAIN + enters note
+  All decisions written to immutable audit log
+  Graph updated to reflect analyst confirmations
+
+STEP 7: REPORT GENERATION
+  Analyst triggers report from Page 5
+  Report Generator assembles confirmed links + full evidence chains
+  + enrichment data + preservation refs + audit trail
+  JSON evidence package generated
+  PDF summary report generated (ReportLab)
+  SHA-256 bundle hash computed and stored
+  Download links available in Streamlit
+
+TOTAL PIPELINE TIME (target): < 60 minutes for a standard case
+
+
+================================================================================
+9. CORRELATION ENGINE (UPGRADED v2.0)
+================================================================================
+
+9.1 SCORING FORMULA
+  confidence_score = SUM(signal_weight * decay_factor)
+                   - SUM(conflict_penalties)
+                   [+ semantic_bonus if pgvector enabled: 0-10]
+                   [+ gravatar_bonus if Hashtray confirms: 0-8]
+                   [+ google_bonus if Ghunt confirms: 0-10]
+                   [+ whatsapp_bonus if Email2WhatsApp confirms: 0-7]
+
+9.2 POSITIVE SIGNAL WEIGHTS
++------------------------------------------+--------+------------------------+
+| Signal                                   | Weight | Implementation         |
++------------------------------------------+--------+------------------------+
+| Identical username (exact, normalised)   |   25   | string equality after  |
+|                                          |        | lowercasing + leet fix |
++------------------------------------------+--------+------------------------+
+| Same email or direct variation           |   20   | exact match or +alias  |
++------------------------------------------+--------+------------------------+
+| Breach credential reuse (H8mail)         |   18   | * decay applied        |
++------------------------------------------+--------+------------------------+
+| Identical profile photo (pHash <= 8)     |   15   | imagehash pHash        |
++------------------------------------------+--------+------------------------+
+| Ghunt Google account confirmed           |   12   | Google profile match   |
++------------------------------------------+--------+------------------------+
+| Bio/description similarity >= 80%        |   10   | sentence-transformers  |
+|                                          |        | cosine similarity      |
++------------------------------------------+--------+------------------------+
+| Overlapping linked external URLs         |   10   | URL set intersection   |
++------------------------------------------+--------+------------------------+
+| Gravatar profile confirmed (Hashtray)    |    8   | email/username → avatar|
++------------------------------------------+--------+------------------------+
+| WhatsApp linkage confirmed               |    7   | Email2WhatsApp probe   |
++------------------------------------------+--------+------------------------+
+| Username edit distance <= 2 chars        |    5   | Levenshtein distance   |
++------------------------------------------+--------+------------------------+
+| Dork hit confirms name + platform        |    5   | Google dork result     |
++------------------------------------------+--------+------------------------+
+| Platform enrichment metadata match       |    5   | Tier 4 tool output     |
+|  (bio, location, join date overlap)      |        |                        |
++------------------------------------------+--------+------------------------+
+
+9.3 CONFLICT PENALTIES
++------------------------------------------+--------+------------------------+
+| Signal                                   | Penalty| Implementation         |
++------------------------------------------+--------+------------------------+
+| Account identified as bot/automated      |  -15   | Pattern detection      |
++------------------------------------------+--------+------------------------+
+| Timezone mismatch > 4hr (systematic)     |  -10   | Posting time analysis  |
++------------------------------------------+--------+------------------------+
+| Primary language mismatch                |   -8   | langdetect on bio/post |
++------------------------------------------+--------+------------------------+
+| Username on generic blacklist            |   -8   | admin, user, test, etc.|
++------------------------------------------+--------+------------------------+
+| Account creation date impossible         |   -5   | Temporal logic check   |
++------------------------------------------+--------+------------------------+
+| Platform allows duplicate usernames      |   -5   | Config flag per        |
+|                                          |        | platform               |
++------------------------------------------+--------+------------------------+
+
+9.4 CONFIDENCE THRESHOLDS
+  75 – 100  =  HIGH      Analyst confirmation required before report
+  50 –  74  =  MEDIUM    Include with caveat, review recommended
+  25 –  49  =  LOW       Background context only
+   0 –  24  =  DISCARD   Insufficient evidence, raw log only
+
+  MINIMUM CORROBORATION RULE (non-negotiable):
+  No identity link is written to Neo4j from a single signal alone,
+  regardless of how high the weight is.
+  Minimum 2 independent signals required.
+
+9.5 EVIDENCE DECAY FORMULA
+  decay_factor = max(MIN_DECAY, 1.0 - (evidence_age_days / DECAY_PERIOD))
+
+  +----------------------------+-------------+------------+
+  | Signal Type                | Decay Period| Min Decay  |
+  +----------------------------+-------------+------------+
+  | Breach credential reuse    | 1095 (3yr)  |   0.20     |
+  | Email on platform          |  730 (2yr)  |   0.30     |
+  | Username match             |  365 (1yr)  |   0.50     |
+  | Profile photo match        |  180 (6mo)  |   0.60     |
+  | Bio/description text       |   90 (3mo)  |   0.70     |
+  | Dork hit                   |   30 (1mo)  |   0.50     |
+  +----------------------------+-------------+------------+
+
+  Signals NOT subject to decay (durable identifiers):
+    Identical username (exact), identical email, URL overlap,
+    Google account confirmation, Gravatar confirmation
+
+9.6 LEET-SPEAK NORMALISATION (for username matching)
+  Apply before any username comparison:
+    0 → o,  1 → i (or l),  3 → e,  4 → a,
+    5 → s,  7 → t,  @ → a
+
+  COMMON USERNAME BLACKLIST (automatic -8 penalty):
+    admin, user, test, info, help, support, contact, hello,
+    noreply, no-reply, webmaster, postmaster, root, guest
+
+
+================================================================================
+10. EVIDENCE SCHEMA (MINIMUM VIABLE)
+================================================================================
+
+10.1 POSTGRESQL TABLES
+
+-- Cases table (unchanged)
+CREATE TABLE cases (
+    case_id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    authority_id        TEXT NOT NULL,
+    agency_id           TEXT NOT NULL,
+    analyst_id          TEXT NOT NULL,
+    supervisor_approval BOOLEAN NOT NULL,
+    purpose_statement   TEXT NOT NULL,
+    target_category     TEXT NOT NULL,
+    jurisdiction        TEXT NOT NULL,
+    retention_period    INTEGER NOT NULL,
+    seed_type           TEXT NOT NULL,
+    seed_value          TEXT NOT NULL,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Evidence units table (v2.0 — extended)
+CREATE TABLE evidence_units (
+    evidence_id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    case_id              UUID NOT NULL REFERENCES cases(case_id),
+    run_id               UUID NOT NULL,
+    tool_name            TEXT NOT NULL,
+    tool_version         TEXT NOT NULL,
+    tool_tier            INTEGER NOT NULL,       -- NEW: 1-4
+    source_platform      TEXT NOT NULL,
+    source_tier          INTEGER NOT NULL,
+    seed_type            TEXT NOT NULL,
+    seed_value           TEXT NOT NULL,
+    result_type          TEXT NOT NULL,
+    result_value         TEXT NOT NULL,
+    confidence_raw       FLOAT,
+    signal_weights       JSONB,
+    timestamp_collected  TIMESTAMPTZ NOT NULL,
+    timestamp_preserved  TIMESTAMPTZ,
+    snapshot_ref         TEXT,
+    snapshot_hash        TEXT,
+    wayback_ref          TEXT,                   -- NEW
+    platform_enrichment  JSONB,                  -- NEW
+    analyst_id           TEXT NOT NULL,
+    notes                TEXT,
+    UNIQUE (case_id, source_platform, result_value, seed_value)
+);
+
+-- Identity links table (unchanged)
+CREATE TABLE identity_links (
+    link_id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    case_id             UUID NOT NULL REFERENCES cases(case_id),
+    account_a           TEXT NOT NULL,
+    account_b           TEXT NOT NULL,
+    platform_a          TEXT NOT NULL,
+    platform_b          TEXT NOT NULL,
+    confidence_score    FLOAT NOT NULL,
+    confidence_tier     TEXT NOT NULL,
+    signal_breakdown    JSONB NOT NULL,
+    signal_count        INTEGER NOT NULL,
+    analyst_decision    TEXT,
+    analyst_note        TEXT,
+    decided_at          TIMESTAMPTZ,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Audit log (append-only — no UPDATE, no DELETE at DB level)
+CREATE TABLE audit_log (
+    log_id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    case_id             UUID REFERENCES cases(case_id),
+    run_id              UUID,
+    event_type          TEXT NOT NULL,
+    actor_id            TEXT NOT NULL,
+    event_metadata      JSONB,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+-- GRANT INSERT only — enforces append-only at DB level
+
+
+================================================================================
+11. TOOL INTEGRATION PLAN (FULL 35+ TOOL SUITE)
+================================================================================
+
+11.1 SHERLOCK
+  Install:   pip install sherlock-project
+  Run:       sherlock {username} --json --output {output_file}
+  Parse:     JSON output, key = site name, value = URL if found
+  Tier:      2 (username deep sweep)
+  Proxy:     B (direct egress)
+  Fallback:  Maigret
+
+11.2 MAIGRET
+  Install:   pip install maigret
+  Run:       maigret {username} --json --folderoutput {output_dir}
+  Parse:     JSON report, "found" key per site
+  Tier:      2 (username deep sweep)
+  Proxy:     B
+  Fallback:  WhatsMyName
+
+11.3 BLACKBIRD
+  Install:   git clone https://github.com/p1ngul1n0/blackbird
+  Run:       python blackbird.py -u {username} --json
+             python blackbird.py -e {email} --json
+  Parse:     JSON, "results" array
+  Tier:      1 (fast sweep — fires first)
+  Proxy:     B
+
+11.4 WHATSMYNAME-PYTHON
+  Install:   pip install wmn  OR  git clone WhatsMyName-Python repo
+  Run:       python3 whatsmyname.py -u {username} --output json
+  Parse:     JSON results array
+  Tier:      1 (fast sweep)
+  Proxy:     B
+
+11.5 NEXFIL
+  Install:   pip install nexfil  OR  git clone
+  Run:       nexfil -u {username}
+  Parse:     Parse stdout for found/not found per site
+  Tier:      2
+  Proxy:     B
+  Notes:     Good supplementary coverage alongside Sherlock
+
+11.6 SOCIAL-ANALYZER
+  Install:   pip install social-analyzer
+  Run:       python -m social_analyzer --username {username} --output json
+  Parse:     JSON, includes metadata per found account
+  Tier:      2
+  Proxy:     B
+  Notes:     Returns richer metadata (bio, followers) where available
+
+11.7 TRACER
+  Install:   git clone tracer repo
+  Run:       python tracer.py -u {username}
+  Parse:     Parse stdout for linked identities
+  Tier:      2 (runs after initial hits to find reuse patterns)
+  Proxy:     B
+
+11.8 ENOLA (Go)
+  Install:   go install github.com/TheYahya/enola@latest
+  Run:       enola {username} --json
+  Parse:     JSON output
+  Tier:      2
+  Proxy:     B
+  Notes:     Compile and store binary in /tools/go/
+
+11.9 DETECTDEE (Go)
+  Install:   go install github.com/piaolin/DetectDee@latest
+  Run:       DetectDee find -u {username} --json
+  Parse:     JSON output
+  Tier:      2
+  Proxy:     B
+
+11.10 HOLEHE
+  Install:   pip install holehe
+  Run:       holehe {email} --only-used --no-color
+  Parse:     stdout lines: "[+] site.com" = found
+  Tier:      2 (email deep sweep)
+  Proxy:     B
+  Notes:     Password reset probing — document for judges. Does NOT
+             authenticate. Only checks account existence.
+
+11.11 H8MAIL
+  Install:   pip install h8mail
+  Run:       h8mail -t {email} -sk {api_keys_file}
+  Parse:     JSON output for breach hits
+  Tier:      2
+  Proxy:     B
+  Notes:     Free tier rate limits. Use HIBP API key as supplement.
+
+11.12 ZEHEF
+  Install:   git clone zehef repo
+  Run:       python zehef.py {email}
+  Parse:     stdout — "[+]" indicates found
+  Tier:      1 (fast email sweep)
+  Proxy:     B
+
+11.13 MAILCAT
+  Install:   pip install mailcat  OR  git clone
+  Run:       mailcat {email}
+  Parse:     stdout for found usernames/accounts
+  Tier:      2
+  Proxy:     B
+
+11.14 MAILSLEUTH (Go)
+  Install:   go install mailsleuth binary
+  Run:       mailsleuth -e {email} --json
+  Parse:     JSON output
+  Tier:      2
+  Proxy:     B
+
+11.15 GHUNT
+  Install:   pip install ghunt  (isolated venv — conflict-prone)
+  Run:       ghunt email {email} --json
+  Parse:     JSON — Google profile, maps activity, calendar hints
+  Tier:      2 (special: Google accounts only)
+  Proxy:     B
+  Notes:     Requires Google cookies setup. Run setup once at deploy time.
+             Returns rich data: profile photo, maps reviews, YouTube,
+             potentially linked phone. Weight: +12 in scoring.
+
+11.16 HASHTRAY
+  Install:   git clone hashtray repo
+  Run:       python hashtray.py {email_or_username}
+  Parse:     stdout for Gravatar hit
+  Tier:      1 (fast sweep)
+  Proxy:     B
+  Notes:     Gravatar correlation. Weight: +8 in scoring.
+
+11.17 EYES
+  Install:   git clone eyes repo
+  Run:       python eyes.py {email}
+  Parse:     stdout for social presence data
+  Tier:      2
+  Proxy:     B
+
+11.18 SOCIALSCAN
+  Install:   pip install socialscan
+  Run:       socialscan {email_or_username} --json
+  Parse:     JSON output
+  Tier:      1 (fast sweep)
+  Proxy:     B
+
+11.19 EMAIL2WHATSAPP (Go)
+  Install:   go install Email2WhatsApp binary
+  Run:       email2whatsapp -e {email}
+  Parse:     stdout for WhatsApp account evidence
+  Tier:      2
+  Proxy:     A (Tor — WhatsApp is rate-sensitive)
+  Notes:     Weight: +7 in scoring if positive.
+
+11.20 DORKS EYE
+  Install:   git clone DorksEye repo
+  Run:       python dorks_eye.py -q {seed} --output dorks_results.txt
+  Parse:     Parse results for URLs mentioning seed
+  Tier:      3 (passive, background, Tor-routed)
+  Proxy:     A (Tor via GoTOR)
+  Notes:     Max 10 queries per case. 30s cooldown. Document for judges
+             as "passive surface exposure discovery — no platform contact."
+
+11.21 DORKSINT
+  Install:   pip install dorksint  OR  git clone
+  Run:       dorksint -q {seed}
+  Parse:     stdout for exposure hits
+  Tier:      3 (passive, Tor-routed)
+  Proxy:     A
+
+11.22 WAYBACK URLS (waybackpy)
+  Install:   pip install waybackpy
+  Run:       waybackpy --url {url} --cdx
+  Parse:     CDX API response — list of archived URLs
+  Tier:      3
+  Proxy:     B
+  Notes:     Run on every confirmed domain/profile URL.
+             Reveals past content exposure.
+
+11.23 WAYBACKPACK
+  Install:   pip install waybackpack
+  Run:       waybackpack {url} -d {output_dir} --max-pages 3
+  Parse:     Downloaded HTML files in output_dir
+  Tier:      4 (triggered after Wayback URLs finds snapshots)
+  Proxy:     B
+  Notes:     Downloads actual archived content for preserved evidence.
+
+11.24 THE TIME MACHINE
+  Install:   git clone TheTimeMachine repo
+  Run:       python thetimemachine.py -u {url}
+  Parse:     Historical snapshot data
+  Tier:      4 (triggered on confirmed domain hits)
+  Proxy:     B
+
+11.25 HUNTPASTEBIN
+  Install:   pip/git install HuntPastebin tool
+  Run:       python huntpastebin.py -q {seed_email_or_username}
+  Parse:     Pastebin leak hits mentioning seed
+  Tier:      3 (passive background)
+  Proxy:     A (Tor)
+  Notes:     Run once per case on seed value. Rate limit: 5 queries max.
+
+11.26 GOWITNESS
+  Install:   Download binary from GitHub releases
+  Run:       gowitness single --url {url} --screenshot-path {output}
+  Notes:     Screenshots every positive hit. Runs after each hit.
+             Store screenshot in MinIO. Display in analyst dashboard.
+  Tier:      2/4 (runs on every hit regardless of tier)
+
+11.27 TOUTATIS
+  Install:   pip install toutatis
+  Run:       toutatis -u {username} -s {session_id}
+  Parse:     JSON output — followers, bio, contact info
+  Tier:      4 (triggered on confirmed Instagram hit)
+  Proxy:     A (Tor — Instagram blocks easily)
+  Notes:     Requires Instagram session token. Set up at deploy time.
+
+11.28 SNAPINTEL
+  Install:   git clone SnapIntel repo
+  Run:       python snapintel.py -u {username}
+  Parse:     stdout for Snapchat account info
+  Tier:      4 (triggered on confirmed Snapchat hit)
+  Proxy:     B
+
+11.29 GEOGRAMINT
+  Install:   git clone Geogramint repo
+  Run:       python geogramint.py -p {phone_or_username}
+  Parse:     Telegram account correlation data
+  Tier:      4 (triggered on confirmed Telegram hit)
+  Proxy:     B
+  Notes:     More reliable with phone seed. Correlates to Telegram.
+
+11.30 TELEGRAMSINT
+  Install:   git clone TeleGramSint repo
+  Run:       python telegramsint.py -u {username}
+  Parse:     Telegram user/channel data
+  Tier:      4
+  Proxy:     B
+
+11.31 TIKTOK USERDATA
+  Install:   git clone tiktok-userdata repo
+  Run:       python tiktok_userdata.py -u {username}
+  Parse:     JSON — metadata, follower count, bio, linked URLs
+  Tier:      4 (triggered on confirmed TikTok hit)
+  Proxy:     B
+
+11.32 MASTOSINT
+  Install:   git clone MastOSINT repo
+  Run:       python mastosint.py -u {username}
+  Parse:     Mastodon profile and post data
+  Tier:      4
+  Proxy:     B
+
+11.33 OSINTSSKY
+  Install:   git clone OSINTSky repo
+  Run:       python osintssky.py -u {username}
+  Parse:     Bluesky account data via free API
+  Tier:      4
+  Proxy:     B
+
+11.34 OSINTCHAN
+  Install:   git clone OSINTChan repo
+  Run:       python osintchan.py -q {username}
+  Parse:     4chan thread + post mentions
+  Tier:      4
+  Proxy:     B
+
+11.35 PROTON INTELLIGENCE
+  Install:   git clone ProtonIntelligence repo
+  Run:       python proton_intel.py -e {email}
+  Parse:     Limited ProtonMail account data
+  Tier:      4
+  Proxy:     B
+
+11.36 LINKEDIN2USERNAME
+  Install:   pip install linkedin2username
+  Run:       python linkedin2username.py -c {company} -n {name}
+  Parse:     Candidate email patterns + usernames
+  Tier:      4 (triggered on confirmed LinkedIn hit)
+  Proxy:     B
+  Notes:     Use discovered real name as input if confirmed.
+
+11.37 THEHARVESTER
+  Install:   pip install theHarvester
+  Run:       theHarvester -d {domain} -b all -f {output}
+  Parse:     JSON output — emails, subdomains, IPs, hosts
+  Tier:      4 (triggered on confirmed domain hit)
+  Proxy:     B
+
+11.38 FINALRECON
+  Install:   git clone FinalRecon repo
+  Run:       python finalrecon.py --full {domain}
+  Parse:     JSON — WHOIS, DNS, SSL, crawl, headers
+  Tier:      4 (triggered on confirmed domain hit)
+  Proxy:     B
+
+11.39 GITHOUND
+  Install:   go install GitHound binary
+  Run:       echo {username} | githound --dig --results-only
+  Parse:     stdout — exposed secrets, sensitive strings in repos
+  Tier:      4 (triggered on confirmed GitHub hit)
+  Proxy:     B
+
+
+================================================================================
+12. FREE INFRASTRUCTURE SETUP
+================================================================================
+
+12.1 DOCKER COMPOSE (docker-compose.yml skeleton v2.0)
+
+version: "3.9"
+services:
+
+  postgres:
+    image: pgvector/pgvector:pg15
+    environment:
+      POSTGRES_DB: socmint
+      POSTGRES_USER: socmint
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  neo4j:
+    image: neo4j:5-community
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD}
+    volumes:
+      - neo4jdata:/data
+    ports:
+      - "7474:7474"   # Browser UI
+      - "7687:7687"   # Bolt
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  minio:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD}
+    volumes:
+      - miniodata:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"   # Console UI
+
+  worker_python:
+    build: ./worker_python
+    depends_on: [postgres, redis, minio]
+    env_file: .env
+    volumes:
+      - ./tools/python:/tools/python
+    # Handles: Sherlock, Maigret, Holehe, H8mail, Blackbird,
+    #          WhatsMyName, Nexfil, Social-Analyzer, Holehe,
+    #          Zehef, Mailcat, Ghunt, Eyes, SocialScan, Hashtray,
+    #          Tracer, Dorks Eye, Dorksint, HuntPastebin, Toutatis,
+    #          Medor, SnapIntel, Geogramint, TeleGramSint, TikTok,
+    #          MastOSINT, OSINTSky, OSINTChan, ProtonIntel,
+    #          LinkedIn2Username, TheHarvester, FinalRecon,
+    #          WayBackPack, The Time Machine
+
+  worker_go:
+    build: ./worker_go
+    depends_on: [postgres, redis, minio]
+    env_file: .env
+    volumes:
+      - ./tools/go:/tools/go
+    # Handles: Enola, DetectDee, Mailsleuth, Email2WhatsApp,
+    #          GoWitness, GitHound, GoTOR (Tor routing)
+
+  api:
+    build: ./api
+    depends_on: [postgres, neo4j, redis]
+    env_file: .env
+    ports:
+      - "8000:8000"
+
+  dashboard:
+    build: ./dashboard
+    depends_on: [api]
+    env_file: .env
+    ports:
+      - "8501:8501"
+
+volumes:
+  pgdata:
+  neo4jdata:
+  miniodata:
+
+12.2 ENVIRONMENT VARIABLES (.env — git ignored)
+  POSTGRES_PASSWORD=changeme_in_prod
+  NEO4J_PASSWORD=changeme_in_prod
+  MINIO_USER=socmint
+  MINIO_PASSWORD=changeme_in_prod
+  REDIS_URL=redis://redis:6379/0
+  DATABASE_URL=postgresql://socmint:${POSTGRES_PASSWORD}@postgres:5432/socmint
+  NEO4J_URI=bolt://neo4j:7687
+  MINIO_ENDPOINT=minio:9000
+  H8MAIL_API_KEY=your_free_key_here
+  HIBP_API_KEY=your_free_key_here
+  INSTAGRAM_SESSION_ID=your_session_token_here
+  GHUNT_COOKIES_PATH=/tools/python/ghunt/cookies.json
+  TOR_PROXY=socks5://127.0.0.1:9050
+
+
+
+
+
+================================================================================
+16. TECHNICAL RISKS & MITIGATIONS
+================================================================================
+
+RISK 1: OSINT tools break during demo
+  Likelihood: HIGH (Sherlock, Holehe break as platforms change)
+  Mitigation: Run all tools against demo case on Day 24 (Week 4).
+              FallbackChainManager auto-skips broken tools.
+              Pre-cache 1 full run in PostgreSQL as demo fallback.
+              If a tool breaks: frame it — "System detects tool
+              failure and auto-routes to fallback chain."
+
+RISK 2: Platform blocks during live demo
+  Likelihood: MEDIUM
+  Mitigation: Use Tor for rate-sensitive tools during demo if needed.
+              Pre-run results cached. Frame blocking as UNAVAILABLE
+              (not "not found") — show judges the system distinguishes.
+
+RISK 3: Docker Compose fails on demo machine
+  Likelihood: LOW but catastrophic
+  Mitigation: Test on judge's machine OS one week before demo.
+              Have backup laptop with stack pre-running.
+              Screenshot walkthrough as last resort.
+
+RISK 4: Go binary compilation issues on demo machine
+  Likelihood: MEDIUM (Go version mismatch)
+  Mitigation: Pre-compile all Go binaries for linux/amd64.
+              Store compiled binaries in /tools/go/ (not just source).
+              Document exact Go version in README.
+
+RISK 5: Neo4j graph rendering slow with many nodes
+  Likelihood: MEDIUM
+  Mitigation: Limit graph display to top 50 nodes by confidence.
+              Use NetworkX + Plotly as fallback if Neo4j Browser lags.
+
+RISK 6: Ghunt Google cookie expiry
+  Likelihood: MEDIUM (Google cookies expire)
+  Mitigation: Re-authenticate Ghunt cookies 48 hours before demo.
+              If Ghunt fails during demo, show cached enrichment result.
+              Label clearly as "Google account enrichment — cached result."
+
+RISK 7: Holehe false positives (password reset probing not 100% reliable)
+  Likelihood: MEDIUM
+  Mitigation: Require 2-signal corroboration (the rule handles this).
+              Label Holehe results as Tier 2 (public web, unverified).
+              Holehe hit alone never produces an identity link.
+
+RISK 8: Tier 4 platform tools requiring session tokens (Instagram, Telegram)
+  Likelihood: HIGH (session tokens are fragile)
+  Mitigation: Set up fresh session tokens on Day 24.
+              If a platform tool fails: frame as limitation, show
+              what the tool would return from a pre-run demo cache.
+              Do not demo live Toutatis unless token confirmed working.
+
+RISK 9: Team integration conflicts (merge hell in Week 3)
+  Likelihood: MEDIUM
+  Mitigation: API contracts defined in Week 1 (FastAPI endpoint specs).
+              Each person owns their module's endpoint — others call it.
+              Daily 15-minute standups from Day 8 onward.
+              Feature freeze Day 28 — no new code after that.
+
+RISK 10: Dorking tools triggering Google CAPTCHA
+  Likelihood: HIGH if not Tor-routed
+  Mitigation: ALL dorking tools MUST use Tor (GoTOR).
+              Max 10 queries per case, 30s cooldown between queries.
+              If CAPTCHA hit during demo: skip dorking, show cached
+              result. Frame as "Passive recon — runs in background,
+              no platform contact required for core demo."
+
+
+================================================================================
+                    END OF DOCUMENT — HACKATHON PLAN v2.0
+          Confidential — Hackathon Use Only — Team Internal Document
+     Upgraded from v1.0 | Full OSINT Cabal Linux CLI Tool Suite Integrated
+================================================================================

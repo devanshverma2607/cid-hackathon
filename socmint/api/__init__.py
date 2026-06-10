@@ -1,0 +1,1 @@
+"""SOCMINT FastAPI application package."""

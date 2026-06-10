@@ -1,0 +1,30 @@
+# Secrets / environment
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Node
+node_modules/
+
+# Compiled Go binaries (keep the placeholder)
+worker_go/tools/go/*
+!worker_go/tools/go/.gitkeep
+
+# Logs
+*.log
+
+# Local persistent data
+minio_data/
+postgres_data/
+neo4j_data/
+redis_data/
+
+# Hash bundles
+*.sha256
+
+# Local case output directory
+cases/
