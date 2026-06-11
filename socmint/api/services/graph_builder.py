@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections import defaultdict
 from uuid import UUID
 
 from sqlalchemy import text
@@ -183,6 +184,7 @@ class GraphBuilder:
                             "kind": "account",
                             "url": nid,
                             "confidence": r.get("confidence_score", 0),
+                            "community": node.get("community"),
                         }
                 edges.append(
                     {
@@ -225,6 +227,7 @@ class GraphBuilder:
                             "kind": "source",
                             "url": None,
                             "confidence": 0,
+                            "community": None,
                         }
                     if ident_id not in nodes:
                         nodes[ident_id] = {
@@ -234,6 +237,7 @@ class GraphBuilder:
                             "kind": ident_kind,
                             "url": None,
                             "confidence": 0,
+                            "community": None,
                         }
                     edges.append(
                         {
@@ -246,3 +250,155 @@ class GraphBuilder:
                         }
                     )
         return {"nodes": list(nodes.values()), "edges": edges}
+
+    # --------------------------------------------------- community detection
+    def detect_communities(self, case_id: UUID, write_back: bool = True) -> dict:
+        """Partition the case's SAME_AS account graph into communities.
+
+        Prefers Neo4j GDS Louvain when the plugin is installed; otherwise falls
+        back to a dependency-free weighted label-propagation pass over the same
+        edges. Communities refine persona clustering — a single persona can split
+        into tightly-knit sub-clusters (e.g. work vs personal handles). Results
+        are written back onto Account nodes (``a.community``) for the graph view.
+        """
+        nodes, edges = self._load_same_as(case_id)
+        if not nodes:
+            return {"method": "none", "community_count": 0, "communities": {}, "summaries": []}
+
+        communities = self._gds_louvain(case_id)
+        method = "gds_louvain"
+        if not communities:
+            communities = self._label_propagation(nodes, edges)
+            method = "label_propagation"
+
+        groups: dict[int, list[str]] = defaultdict(list)
+        for node, comm in communities.items():
+            groups[comm].append(node)
+        summaries = [
+            {"community_id": comm, "size": len(members), "members": sorted(members)[:25]}
+            for comm, members in sorted(groups.items(), key=lambda kv: (-len(kv[1]), kv[0]))
+        ]
+
+        if write_back:
+            try:
+                self._write_communities(case_id, communities, method)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("community write-back failed: %s", exc)
+
+        return {
+            "method": method,
+            "community_count": len(groups),
+            "communities": communities,
+            "summaries": summaries,
+        }
+
+    def _load_same_as(self, case_id: UUID):
+        """Return (nodes:set, edges:list[(a,b,weight)]) of the case SAME_AS graph."""
+        nodes: set[str] = set()
+        edges: list[tuple[str, str, float]] = []
+        with get_driver().session() as session:
+            records = session.run(
+                """
+                MATCH (a:Account)-[r:SAME_AS {case_id: $cid}]->(b:Account)
+                RETURN a.url AS a, b.url AS b, coalesce(r.confidence_score, 1.0) AS w
+                """,
+                cid=str(case_id),
+            )
+            for rec in records:
+                a, b = rec["a"], rec["b"]
+                if not a or not b or a == b:
+                    continue
+                nodes.add(a)
+                nodes.add(b)
+                edges.append((a, b, float(rec["w"] or 1.0)))
+        return nodes, edges
+
+    @staticmethod
+    def _label_propagation(nodes, edges, max_iter: int = 25) -> dict:
+        """Deterministic weighted label propagation (no external dependency)."""
+        adj: dict[str, list[tuple[str, float]]] = defaultdict(list)
+        for a, b, w in edges:
+            adj[a].append((b, w))
+            adj[b].append((a, w))
+        ordered = sorted(nodes)
+        labels = {n: i for i, n in enumerate(ordered)}
+        for _ in range(max_iter):
+            changed = False
+            for n in ordered:
+                neigh = adj.get(n)
+                if not neigh:
+                    continue
+                tally: dict[int, float] = defaultdict(float)
+                for nb, w in neigh:
+                    tally[labels[nb]] += w
+                # highest neighbour weight; tie-break to smallest label id
+                best = min(tally.items(), key=lambda kv: (-kv[1], kv[0]))[0]
+                if labels[n] != best:
+                    labels[n] = best
+                    changed = True
+            if not changed:
+                break
+        renum: dict[int, int] = {}
+        for n in ordered:
+            lab = labels[n]
+            if lab not in renum:
+                renum[lab] = len(renum)
+        return {n: renum[labels[n]] for n in ordered}
+
+    def _gds_louvain(self, case_id: UUID):
+        """Try Neo4j GDS Louvain; return {url: community_id} or None if unavailable."""
+        graph_name = "comm_" + str(case_id).replace("-", "")
+        cid = str(case_id)
+        try:
+            with get_driver().session() as session:
+                session.run("CALL gds.graph.drop($g, false) YIELD graphName", g=graph_name)
+                session.run(
+                    """
+                    CALL gds.graph.project.cypher(
+                      $g,
+                      'MATCH (n:Account) WHERE (n)-[:SAME_AS {case_id:$cid}]-() RETURN id(n) AS id',
+                      'MATCH (a:Account)-[r:SAME_AS]-(b:Account) WHERE r.case_id = $cid
+                       RETURN id(a) AS source, id(b) AS target, coalesce(r.confidence_score,1.0) AS weight',
+                      {parameters: {cid: $cid}}
+                    ) YIELD graphName
+                    """,
+                    g=graph_name, cid=cid,
+                )
+                result = session.run(
+                    """
+                    CALL gds.louvain.stream($g, {relationshipWeightProperty: 'weight'})
+                    YIELD nodeId, communityId
+                    RETURN gds.util.asNode(nodeId).url AS url, communityId
+                    """,
+                    g=graph_name,
+                )
+                communities: dict[str, int] = {}
+                seen: dict[int, int] = {}
+                for rec in result:
+                    url = rec["url"]
+                    if not url:
+                        continue
+                    raw = int(rec["communityId"])
+                    if raw not in seen:
+                        seen[raw] = len(seen)
+                    communities[url] = seen[raw]
+                session.run("CALL gds.graph.drop($g, false) YIELD graphName", g=graph_name)
+            return communities or None
+        except Exception as exc:  # noqa: BLE001 — GDS optional; fall back
+            logger.debug("GDS louvain unavailable (%s); using label propagation", exc)
+            return None
+
+    def _write_communities(self, case_id: UUID, communities: dict, method: str) -> None:
+        """Annotate Account nodes with their detected community id."""
+        rows = [{"url": url, "c": int(comm)} for url, comm in communities.items()]
+        if not rows:
+            return
+        with get_driver().session() as session:
+            session.run(
+                """
+                UNWIND $rows AS row
+                MATCH (a:Account {url: row.url})
+                SET a.community = row.c, a.community_method = $method, a.community_case = $cid
+                """,
+                rows=rows, method=method, cid=str(case_id),
+            )

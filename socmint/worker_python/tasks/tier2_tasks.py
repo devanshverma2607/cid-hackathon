@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from uuid import UUID
 
 from worker_python.celery_app import celery_app
@@ -25,6 +26,33 @@ _ENRICHABLE_HOSTS = {
     "snapchat.com": "snapchat",
 }
 _MAX_CONFIRMED_ENRICHMENTS = 25
+
+# Free-mail / relay providers whose domain is not worth a domain-recon sweep
+# (reconning gmail.com etc. yields nothing about the subject).
+_FREEMAIL_DOMAINS = frozenset({
+    "gmail.com", "googlemail.com", "yahoo.com", "ymail.com", "hotmail.com",
+    "outlook.com", "live.com", "msn.com", "aol.com", "icloud.com", "me.com",
+    "mac.com", "proton.me", "protonmail.com", "pm.me", "gmx.com", "gmx.net",
+    "mail.com", "zoho.com", "yandex.com", "yandex.ru", "tutanota.com",
+    "fastmail.com", "hey.com", "qq.com", "163.com", "126.com", "cox.net",
+    "comcast.net", "verizon.net", "sbcglobal.net", "users.noreply.github.com",
+})
+_EMAIL_DOMAIN_RE = re.compile(r"[A-Za-z0-9._%+\-]+@([A-Za-z0-9.\-]+\.[A-Za-z]{2,})")
+_MAX_DOMAIN_RECON = 5
+
+# --- username -> candidate-email derivation ---------------------------------
+# A username-only case never exercises any email-based OSINT. Real investigators
+# routinely guess ``<username>@<provider>`` and check where it is registered.
+# We do the same with holehe (keyless, reliable), bounded and clearly LABELLED:
+# results are persisted at low confidence behind a notes sentinel so downstream
+# engines surface them as investigative *leads*, never as confirmed identity.
+CANDIDATE_NOTE_PREFIX = "[candidate-email]"
+_CANDIDATE_EMAIL_PROVIDERS = (
+    "gmail.com", "outlook.com", "yahoo.com", "hotmail.com", "proton.me",
+)
+_MAX_CANDIDATE_USERNAMES = 2
+_MAX_CANDIDATE_EMAILS = 8
+_CANDIDATE_LOCALPART_RE = re.compile(r"^[a-z0-9][a-z0-9._\-]{2,30}$")
 
 
 def _enrichable_platform(url: str) -> str | None:
@@ -90,6 +118,206 @@ def _enrich_confirmed_accounts(
     if dispatched:
         logger.info("dispatched %d confirmed-account enrichments", dispatched)
     return dispatched
+
+
+def _recon_discovered_domains(
+    case_id: str, run_id: str, analyst_id: str, already: set[str],
+) -> int:
+    """Run the domain Tier 4 matrix on org domains discovered in the case.
+
+    The domain tools (theHarvester / finalrecon / webdiver / sublist3r /
+    dnstwist) otherwise only fire when a *domain* seed/pivot exists, so a plain
+    username/email case never exercised them. Here we derive registrable domains
+    from confirmed emails (skipping free-mail providers) and sweep each one,
+    bounded by ``_MAX_DOMAIN_RECON``.
+    """
+    from sqlalchemy import text
+    from api.db.postgres import session_scope
+    from worker_python.tasks.pivot_tasks import run_domain_recon
+
+    try:
+        with session_scope() as session:
+            rows = session.execute(
+                text(
+                    "SELECT DISTINCT result_value FROM evidence_units "
+                    "WHERE case_id = :c AND result_type IN "
+                    "('email_registered','breach_hit','google_hit','account_found')"
+                ),
+                {"c": case_id},
+            ).all()
+    except Exception as exc:  # noqa: BLE001 — domain recon must never break the chord
+        logger.warning("domain-recon query failed: %s", exc)
+        return 0
+
+    domains: set[str] = set()
+    for (val,) in rows:
+        m = _EMAIL_DOMAIN_RE.search(val or "")
+        if not m:
+            continue
+        dom = m.group(1).lower().strip(".")
+        if dom and dom not in _FREEMAIL_DOMAINS and dom not in already:
+            domains.add(dom)
+
+    dispatched = 0
+    for dom in sorted(domains)[:_MAX_DOMAIN_RECON]:
+        try:
+            run_domain_recon.delay(dom, case_id, run_id, analyst_id)
+            already.add(dom)
+            dispatched += 1
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("domain recon dispatch failed for %s: %s", dom, exc)
+    if dispatched:
+        logger.info("dispatched %d domain-recon sweeps", dispatched)
+    return dispatched
+
+
+def _top_username_seeds(case_id: str, limit: int) -> list[str]:
+    """Return the most-evidenced username seeds (the strongest identity anchors).
+
+    The original analyst-chosen username produces the most evidence, so ordering
+    by row count surfaces it first; this bounds identity-conflation risk when we
+    later guess emails from these handles.
+    """
+    from sqlalchemy import text
+    from api.db.postgres import session_scope
+
+    try:
+        with session_scope() as session:
+            rows = session.execute(
+                text(
+                    "SELECT seed_value, COUNT(*) AS n FROM evidence_units "
+                    "WHERE case_id = :c AND seed_type = 'username' "
+                    "AND COALESCE(seed_value, '') <> '' "
+                    "GROUP BY seed_value ORDER BY n DESC LIMIT :lim"
+                ),
+                {"c": case_id, "lim": limit * 4},
+            ).all()
+    except Exception as exc:  # noqa: BLE001 — derivation must never break the chord
+        logger.warning("username-seed query failed: %s", exc)
+        return []
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for val, _n in rows:
+        local = (val or "").strip().lower().lstrip("@")
+        if not local or any(c in local for c in ("://", "@", "/")):
+            continue
+        if local in seen:
+            continue
+        seen.add(local)
+        out.append(local)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _existing_case_emails(case_id: str) -> set[str]:
+    """All e-mail addresses already present in the case (as seed or value)."""
+    from sqlalchemy import text
+    from api.db.postgres import session_scope
+
+    emails: set[str] = set()
+    try:
+        with session_scope() as session:
+            rows = session.execute(
+                text(
+                    "SELECT DISTINCT seed_value, result_value FROM evidence_units "
+                    "WHERE case_id = :c AND "
+                    "(seed_value LIKE '%@%' OR result_value LIKE '%@%')"
+                ),
+                {"c": case_id},
+            ).all()
+            for seed_v, res_v in rows:
+                for field in (seed_v, res_v):
+                    if field and "@" in field:
+                        emails.add(field.strip().lower())
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("existing-email query failed: %s", exc)
+    return emails
+
+
+def _candidate_emails(case_id: str) -> list[tuple[str, str]]:
+    """Build ``(candidate_email, source_username)`` guesses for the case."""
+    from api.services.normaliser import USERNAME_BLACKLIST
+
+    usernames = _top_username_seeds(case_id, _MAX_CANDIDATE_USERNAMES)
+    if not usernames:
+        return []
+    existing = _existing_case_emails(case_id)
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for uname in usernames:
+        if uname in USERNAME_BLACKLIST or not _CANDIDATE_LOCALPART_RE.match(uname):
+            continue
+        for provider in _CANDIDATE_EMAIL_PROVIDERS:
+            email = f"{uname}@{provider}"
+            if email in existing or email in seen:
+                continue
+            seen.add(email)
+            out.append((email, uname))
+            if len(out) >= _MAX_CANDIDATE_EMAILS:
+                return out
+    return out
+
+
+@celery_app.task(name="pipeline.derive_username_emails")
+def derive_username_emails(case_id: str, run_id: str, analyst_id: str) -> dict:
+    """Guess ``username@provider`` emails and probe them with holehe.
+
+    This squeezes an email-registration footprint out of a *username-only* case.
+    Each candidate is checked with holehe (the keyless, reliable registration
+    checker); a candidate is kept only if it is actually registered somewhere
+    (proving the address is real and in use, which keeps noise down). Every kept
+    unit is tagged with the ``[candidate-email]`` notes sentinel + low confidence
+    so the profile/insight/persona engines treat it as an unconfirmed *lead*,
+    never as part of the subject's confirmed identity.
+    """
+    try:
+        candidates = _candidate_emails(case_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("candidate-email derivation failed: %s", exc)
+        return {"candidates": 0, "confirmed": 0, "units": 0}
+    if not candidates:
+        return {"candidates": 0, "confirmed": 0, "units": 0}
+
+    from worker_python.adapters.email.holehe import HoleheAdapter
+
+    adapter = HoleheAdapter()
+    if not adapter.health_check():
+        logger.info("holehe unavailable; skipping candidate-email derivation")
+        return {"candidates": len(candidates), "confirmed": 0, "units": 0}
+
+    case_uuid, run_uuid = UUID(case_id), UUID(run_id)
+    confirmed = 0
+    total = 0
+    for email, uname in candidates:
+        try:
+            units = adapter.execute(email, case_uuid, run_uuid, analyst_id, "email")
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("holehe candidate run failed for %s: %s", email, exc)
+            continue
+        positives = [u for u in units if u.result_type == "email_registered"]
+        if not positives:
+            continue  # address not in use anywhere — drop it (no conflation noise)
+        note = (
+            f"{CANDIDATE_NOTE_PREFIX} {email} derived from username '{uname}'. "
+            f"Ownership UNCONFIRMED — holehe found {len(positives)} registration(s)."
+        )
+        for u in positives:
+            u.seed_value = email
+            u.confidence_raw = 0.35
+            u.notes = note
+            enrich = dict(u.platform_enrichment or {})
+            enrich.update({"candidate": True, "derived_from_username": uname})
+            u.platform_enrichment = enrich
+        total += preserve_and_persist(positives)
+        confirmed += 1
+    if confirmed:
+        logger.info(
+            "candidate-email derivation: %d/%d guesses registered (%d units)",
+            confirmed, len(candidates), total,
+        )
+    return {"candidates": len(candidates), "confirmed": confirmed, "units": total}
 
 
 @celery_app.task(name="tier2.username_sweep")
@@ -166,6 +394,18 @@ def aggregate_results(results, case_id: str, run_id: str, analyst_id: str) -> di
     enrichment_dispatched += _enrich_confirmed_accounts(
         case_id, run_id, analyst_id, dispatched_urls, run_platform_enrichment
     )
+
+    # Sweep the domain Tier 4 matrix on any org domains found in confirmed
+    # emails so theHarvester/finalrecon/webdiver/sublist3r/dnstwist are exercised
+    # even on a username/email case that produced no explicit domain seed.
+    enrichment_dispatched += _recon_discovered_domains(
+        case_id, run_id, analyst_id, set()
+    )
+
+    # Derive candidate emails from confirmed usernames and probe them (holehe),
+    # so a username-only case still yields an email-registration footprint. The
+    # results are clearly labelled as unconfirmed leads (see the task docstring).
+    derive_username_emails.delay(case_id, run_id, analyst_id)
 
     # Kick off the recursive pivot loop (the brain): feed every newly discovered
     # identifier back into the pipeline as a fresh seed. Bounded by depth /

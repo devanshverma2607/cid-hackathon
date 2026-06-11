@@ -22,6 +22,12 @@ def get_graph(case_id: UUID, max_nodes: int = 50, include_pivots: bool = True) -
     )
 
 
+@router.get("/graph/{case_id}/communities")
+def get_communities(case_id: UUID) -> dict:
+    """Detect community structure in the case identity graph (Louvain / fallback)."""
+    return GraphBuilder().detect_communities(case_id, write_back=True)
+
+
 @router.get("/health")
 def health(session: Session = Depends(get_db)) -> dict:
     """Liveness probe across all backing services."""

@@ -25,6 +25,10 @@ require_case(case_id)
 c1, c2 = st.columns([1, 1])
 include_pivots = c1.toggle("Show pivot edges (sources → identifiers)", value=True)
 max_nodes = c2.slider("Max links", min_value=10, max_value=200, value=50, step=10)
+color_by_community = st.toggle(
+    "Colour accounts by community (Louvain / label propagation)", value=False,
+    help="Sub-clusters within the identity graph — tightly-knit groups of accounts.",
+)
 
 graph = api_get(f"/api/v1/graph/{case_id}",
                 params={"include_pivots": include_pivots, "max_nodes": max_nodes})
@@ -34,7 +38,28 @@ if graph is None:
 nodes = graph.get("nodes", [])
 edges = graph.get("edges", [])
 if not nodes:
-    st.info("No correlated identities yet. Run the pipeline and review links first.")
+    # The graph only contains HIGH/MEDIUM SAME_AS links + discovery pivots. A
+    # case can still have many LOW-confidence links (and resolved personas) that
+    # are intentionally not promoted to the graph — explain that rather than
+    # implying nothing was found.
+    st.info(
+        "No HIGH/MEDIUM-confidence correlations to plot yet. The identity graph "
+        "shows only strongly-linked accounts (and discovery pivots)."
+    )
+    status = api_get(f"/api/v1/reports/status/{case_id}") or {}
+    n_links = status.get("identity_links", 0)
+    if n_links:
+        st.caption(
+            f"This case has **{n_links}** identity link(s), but they are all "
+            "below the graph threshold. Review them in **Review Queue**, or see "
+            "clustered accounts in **Identity Resolution**."
+        )
+        gc1, gc2 = st.columns(2)
+        gc1.page_link("pages/5_review_queue.py", label="Open Review Queue →", icon="✅")
+        gc2.page_link("pages/7_persona_resolution.py",
+                      label="Open Identity Resolution →", icon="🧬")
+    else:
+        st.caption("Run the pipeline from **Pipeline Status** to collect evidence first.")
     st.stop()
 
 kinds_present = sorted({n.get("kind", "account") for n in nodes})
@@ -86,17 +111,33 @@ for tier, group in by_tier.items():
     ))
 
 # --- single node trace, coloured per-kind --------------------------------
+_COMMUNITY_PALETTE = [
+    "#3498db", "#e67e22", "#9b59b6", "#1abc9c", "#e84393", "#f39c12",
+    "#2ecc71", "#e74c3c", "#16a085", "#d35400", "#2980b9", "#8e44ad",
+]
+
+
+def _node_color(n: dict) -> str:
+    if color_by_community and n.get("community") is not None:
+        return _COMMUNITY_PALETTE[int(n["community"]) % len(_COMMUNITY_PALETTE)]
+    return kind_color(n.get("kind", "account"))
+
+
 node_trace = go.Scatter(
     x=[pos[n["id"]][0] for n in fnodes],
     y=[pos[n["id"]][1] for n in fnodes],
     mode="markers+text",
     text=[n.get("label", n["id"]) for n in fnodes],
     textposition="top center",
-    hovertext=[f"{n.get('label')}<br>{n.get('kind')} · {n.get('platform')}" for n in fnodes],
+    hovertext=[
+        f"{n.get('label')}<br>{n.get('kind')} · {n.get('platform')}"
+        + (f"<br>community {n.get('community')}" if n.get("community") is not None else "")
+        for n in fnodes
+    ],
     hoverinfo="text",
     marker=dict(
         size=18,
-        color=[kind_color(n.get("kind", "account")) for n in fnodes],
+        color=[_node_color(n) for n in fnodes],
         line=dict(width=2, color="#ffffff"),
     ),
     showlegend=False,
@@ -116,6 +157,31 @@ legend = "  ".join(
     for k, c in KIND_COLORS.items() if k in kinds_present
 )
 st.markdown(legend, unsafe_allow_html=True)
+
+# --- community structure -------------------------------------------------
+with st.expander("🧩 Community structure", expanded=False):
+    st.caption(
+        "Communities are tightly-knit sub-clusters of linked accounts (Louvain "
+        "via Neo4j GDS, or a label-propagation fallback). They can refine a single "
+        "persona into work / personal / alias groupings."
+    )
+    if st.button("Detect communities"):
+        comm = api_get(f"/api/v1/graph/{case_id}/communities")
+        if comm and comm.get("community_count"):
+            st.markdown(
+                f"**{comm['community_count']}** communit"
+                f"{'y' if comm['community_count'] == 1 else 'ies'} "
+                f"detected via `{comm.get('method')}`."
+            )
+            for sm in comm.get("summaries", []):
+                st.markdown(
+                    f"- Community **{sm['community_id']}** · {sm['size']} account(s)"
+                )
+                with st.container():
+                    st.caption(", ".join(sm.get("members", [])[:10]))
+            st.caption("Re-enable 'Colour accounts by community' above to map them.")
+        elif comm is not None:
+            st.info("No multi-account community structure found for this case yet.")
 
 # --- node inspector ------------------------------------------------------
 st.subheader("Inspect a node")

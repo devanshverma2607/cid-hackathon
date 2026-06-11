@@ -141,6 +141,43 @@ for idx, p in enumerate(multi):
             f"last seen {fmt_dt(tl.get('last_seen'))}"
         )
 
+        # calibrated confidence dashboard
+        conf = p.get("confidence") or {}
+        if conf:
+            cc1, cc2, cc3 = st.columns(3)
+            prob = conf.get("probability")
+            cc1.metric("Calibrated probability",
+                       f"{prob:.0%}" if isinstance(prob, (int, float)) else "—")
+            cc2.metric("Signal diversity", conf.get("signal_diversity", 0),
+                       help="Number of distinct signal types fusing this persona")
+            cc3.metric("Competing hypotheses", conf.get("competing_hypotheses", 0),
+                       help="Alternative cross-persona links the engine considered")
+            strongest = conf.get("strongest_signal")
+            if isinstance(strongest, dict) and strongest.get("label"):
+                st.caption(f"Strongest signal: {strongest['label']}")
+            elif strongest:
+                st.caption(f"Strongest signal: {strongest}")
+
+        # alternative hypotheses — links the engine weighed but did not merge
+        hyps = p.get("alternative_hypotheses", [])
+        if hyps:
+            with st.expander(f"⚖️ Alternative hypotheses ({len(hyps)})"):
+                st.caption(
+                    "Cross-persona links the engine considered but did not merge — "
+                    "investigative leads worth a manual look, not conclusions."
+                )
+                for h in hyps:
+                    reasons = ", ".join(
+                        f"{r.get('label', r.get('signal'))}" for r in h.get("reasons", [])
+                    )
+                    st.markdown(
+                        f"- Possible link to **{h.get('with_persona', '?')}** "
+                        f"({h.get('source_label', '')} ↔ {h.get('target_label', '')}) "
+                        f"· weight {h.get('weight', 0)}"
+                        f"{' · hard signal' if h.get('hard') else ''}"
+                        f"{(' · ' + reasons) if reasons else ''}"
+                    )
+
         with st.expander(f"Member accounts ({p.get('account_count', 0)})"):
             rows = []
             for acc in p.get("accounts", []):
@@ -159,19 +196,41 @@ for idx, p in enumerate(multi):
             )
 
 # --- identity cluster map ------------------------------------------------
+# Very large personas (hundreds of accounts) would render as an unreadable
+# hairball and choke the browser, so the map is capped to the most-connected
+# accounts. The persona cards above always reflect the full membership.
+MAX_MAP_NODES = 140
+map_accounts = set(acct_to_persona)
+if len(map_accounts) > MAX_MAP_NODES:
+    degree: dict[str, int] = {}
+    for e in edges:
+        if e["source"] in acct_to_persona and e["target"] in acct_to_persona:
+            degree[e["source"]] = degree.get(e["source"], 0) + 1
+            degree[e["target"]] = degree.get(e["target"], 0) + 1
+    map_accounts = set(
+        sorted(map_accounts, key=lambda a: degree.get(a, 0), reverse=True)[:MAX_MAP_NODES]
+    )
+
 cluster_edges = [
     e for e in edges
-    if e["source"] in acct_to_persona and e["target"] in acct_to_persona
+    if e["source"] in map_accounts and e["target"] in map_accounts
 ]
 if multi and cluster_edges:
     st.subheader("🗺️ Identity cluster map")
+    cap_note = ""
+    if len(acct_to_persona) > len(map_accounts):
+        cap_note = (f" Showing the {len(map_accounts)} most-connected of "
+                    f"{len(acct_to_persona)} linked accounts.")
+    elif data.get("edges_truncated"):
+        cap_note = " Showing the strongest links."
     st.caption(
         "Each colour is one resolved persona. Solid lines are hard links "
         "(merge the accounts); dotted lines are softer corroborating signals."
+        + cap_note
     )
 
     g = nx.Graph()
-    for acc_id in acct_to_persona:
+    for acc_id in map_accounts:
         g.add_node(acc_id)
     for e in cluster_edges:
         g.add_edge(e["source"], e["target"])

@@ -20,6 +20,110 @@ from api.config import get_settings
 from api.db import minio_client
 
 
+# Self-contained styling + behaviour for the interactive HTML report. Kept as
+# plain strings (no external CDN) so the report opens offline in any browser —
+# a hard requirement for a court-ready forensic artifact.
+_HTML_CSS = """
+:root{--hi:#c0392b;--med:#e67e22;--low:#f1c40f;--ok:#27ae60;--ink:#1a1a2e;
+--muted:#666;--line:#dcdce4;--bg:#f5f6fa;--card:#fff;--accent:#2c3e50}
+*{box-sizing:border-box}
+body{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;
+background:var(--bg);color:var(--ink);line-height:1.5}
+header{background:var(--accent);color:#fff;padding:24px 32px}
+header h1{margin:0 0 4px;font-size:22px}
+header .meta{font-size:13px;opacity:.85}
+.wrap{max-width:1200px;margin:0 auto;padding:8px 32px 32px}
+.cards{display:flex;flex-wrap:wrap;gap:16px;margin:16px 0}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;
+padding:14px 18px;flex:1 1 150px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+.card .n{font-size:26px;font-weight:700}
+.card .l{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+section{background:var(--card);border:1px solid var(--line);border-radius:10px;
+margin:16px 0;overflow:hidden}
+section>h2{margin:0;padding:14px 20px;font-size:15px;background:#eef0f6;cursor:pointer;
+display:flex;justify-content:space-between;align-items:center}
+section>h2:after{content:"\\25BC";font-size:10px;color:var(--muted)}
+section.collapsed>h2:after{content:"\\25B6"}
+section.collapsed>.body{display:none}
+.body{padding:16px 20px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);
+vertical-align:top;word-break:break-word}
+th{background:#fafbfe;cursor:pointer;user-select:none}
+th:hover{background:#eef}
+tr:hover td{background:#fafbff}
+.badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;
+font-weight:700;color:#fff}
+.b-HIGH{background:var(--hi)}.b-MEDIUM{background:var(--med)}
+.b-LOW{background:var(--low);color:#333}.b-DISCARD{background:#999}
+.b-CONFIRMED{background:var(--ok)}.b-REJECTED{background:#999}.b-PENDING{background:#888}
+.controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+#q{flex:1 1 280px;padding:9px 12px;border:1px solid var(--line);border-radius:8px;font-size:14px}
+.fbtn{padding:6px 12px;border:1px solid var(--line);background:#fff;border-radius:8px;
+cursor:pointer;font-size:12px}
+.fbtn.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+.gauge{margin:10px 0}
+.gauge .lab{font-size:12px;color:var(--muted);display:flex;justify-content:space-between;margin-bottom:3px}
+.gauge .track{height:14px;background:#eceef5;border-radius:8px;overflow:hidden}
+.gauge .fill{height:100%;border-radius:8px}
+.narr{background:#f8f9fc;border-left:4px solid var(--accent);padding:12px 16px;
+border-radius:0 8px 8px 0;margin:8px 0;font-size:14px;white-space:pre-wrap}
+.ai-tag{display:inline-block;font-size:10px;font-weight:700;color:#fff;background:#6c5ce7;
+padding:1px 6px;border-radius:6px;margin-left:6px;vertical-align:middle}
+.muted{color:var(--muted)}
+.kv{display:grid;grid-template-columns:max-content 1fr;gap:4px 16px;font-size:13px;margin:0}
+.kv dt{color:var(--muted)}.kv dd{margin:0}
+.bars{display:flex;gap:24px;align-items:flex-end;height:130px;padding:8px 4px}
+.bar{display:flex;flex-direction:column;align-items:center;gap:6px;font-size:12px;justify-content:flex-end}
+.bar .col{width:54px;border-radius:6px 6px 0 0;min-height:2px}
+.disclaimer{background:#fff8e1;border:1px solid #ffe082;border-radius:8px;padding:10px 14px;
+font-size:12px;color:#7a5c00;margin:12px 0}
+footer{max-width:1200px;margin:0 auto;padding:16px 32px;color:var(--muted);font-size:12px}
+.hidden{display:none!important}
+"""
+
+_HTML_JS = """
+(function(){
+ document.querySelectorAll('section>h2').forEach(function(h){
+   h.addEventListener('click',function(){h.parentElement.classList.toggle('collapsed');});
+ });
+ function updateRow(tr){tr.classList.toggle('hidden',!!(tr.dataset.qhide||tr.dataset.thide));}
+ var q=document.getElementById('q');
+ if(q){q.addEventListener('input',function(){
+   var t=(q.value||'').toLowerCase();
+   document.querySelectorAll('table.searchable tbody tr').forEach(function(tr){
+     tr.dataset.qhide=(!t||tr.textContent.toLowerCase().indexOf(t)>=0)?'':'1';updateRow(tr);
+   });
+ });}
+ var tier='ALL';
+ document.querySelectorAll('.fbtn[data-tier]').forEach(function(b){
+   b.addEventListener('click',function(){
+     document.querySelectorAll('.fbtn[data-tier]').forEach(function(x){x.classList.remove('active');});
+     b.classList.add('active');tier=b.dataset.tier;
+     document.querySelectorAll('#links-table tbody tr').forEach(function(tr){
+       tr.dataset.thide=(tier==='ALL'||tr.dataset.tier===tier)?'':'1';updateRow(tr);
+     });
+   });
+ });
+ document.querySelectorAll('table.sortable th').forEach(function(th){
+   th.addEventListener('click',function(){
+     var tb=th.closest('table'),body=tb.querySelector('tbody');
+     var rows=[].slice.call(body.querySelectorAll('tr'));
+     var ci=Array.prototype.indexOf.call(th.parentElement.children,th);
+     var asc=th.dataset.asc!=='1';th.dataset.asc=asc?'1':'0';
+     rows.sort(function(a,b){
+       var x=(a.children[ci]||{}).textContent||'',y=(b.children[ci]||{}).textContent||'';
+       var nx=parseFloat(x),ny=parseFloat(y);
+       if(!isNaN(nx)&&!isNaN(ny))return asc?nx-ny:ny-nx;
+       return asc?x.localeCompare(y):y.localeCompare(x);
+     });
+     rows.forEach(function(r){body.appendChild(r);});
+   });
+ });
+})();
+"""
+
+
 class ReportGenerator:
     """Build, render, sign, and persist the evidence package."""
 
@@ -72,14 +176,19 @@ class ReportGenerator:
         clean_links = clean(links)
         clean_case = json.loads(json.dumps(dict(case), default=str)) if case else {}
 
-        intelligence = InsightEngine().assess(clean_evidence, clean_links, clean_case)
+        # The signed report is an explicit, slower action, so it includes the
+        # optional local-LLM narratives (include_ai=True) — unlike the live
+        # dashboard endpoints, which keep them off to render instantly.
+        intelligence = InsightEngine().assess(
+            clean_evidence, clean_links, clean_case, include_ai=True
+        )
 
         try:
             persona = PersonaResolver().resolve(case_id, session)
         except Exception:
             persona = None
         subject_dossier = ProfileEngine().build(
-            clean_evidence, clean_links, clean_case, persona
+            clean_evidence, clean_links, clean_case, persona, include_ai=True
         )
 
         return {
@@ -176,6 +285,17 @@ class ReportGenerator:
             attr_rows.append(["Timezone", str(attrs["timezone"]), ""])
         if attrs.get("phone_region"):
             attr_rows.append(["Phone region", str(attrs["phone_region"]), ""])
+        for c in (attrs.get("contact_numbers") or [])[:6]:
+            label = "Contact number" + (" (masked)" if c.get("obfuscated") else "")
+            via = ", ".join((c.get("sources") or [])[:3])
+            val = str(c.get("value", "")) + (f"  ·  via {via}" if via else "")
+            attr_rows.append([label, Paragraph(val, styles["BodyText"]),
+                              str(c.get("confidence", "")).upper()])
+        for c in (attrs.get("candidate_emails") or [])[:6]:
+            plats = ", ".join((c.get("platforms") or [])[:5])
+            val = str(c.get("value", "")) + (f"  ·  registered on {plats}" if plats else "")
+            attr_rows.append(["Candidate email (unconfirmed)",
+                              Paragraph(val, styles["BodyText"]), "LOW"])
 
         if len(attr_rows) > 1:
             attr_table = Table(attr_rows, colWidths=[3.5 * cm, 9.5 * cm, 2 * cm])
@@ -424,12 +544,232 @@ class ReportGenerator:
         doc.build(story)
         return buffer.getvalue()
 
+    # ----------------------------------------------------- interactive HTML
+    @staticmethod
+    def _html_escape(value) -> str:
+        """Escape any value for safe HTML insertion (prevents stored XSS from
+        attacker-controlled OSINT strings rendered in a browser)."""
+        import html as _html
+
+        return "" if value is None else _html.escape(str(value), quote=True)
+
+    def _html_table(self, table_id, headers, rows, row_attrs=None,
+                    classes="searchable sortable") -> str:
+        """Render a table; cells are escaped unless passed as ('raw', html)."""
+        esc = self._html_escape
+        head = "".join(f"<th>{esc(h)}</th>" for h in headers)
+        out = []
+        for i, row in enumerate(rows):
+            attrs = ""
+            if row_attrs and i < len(row_attrs) and row_attrs[i]:
+                attrs = "".join(f' {k}="{esc(v)}"' for k, v in row_attrs[i].items())
+            cells = []
+            for cell in row:
+                if isinstance(cell, tuple) and len(cell) == 2 and cell[0] == "raw":
+                    cells.append(f"<td>{cell[1]}</td>")
+                else:
+                    cells.append(f"<td>{esc(cell)}</td>")
+            out.append(f"<tr{attrs}>{''.join(cells)}</tr>")
+        empty = "" if rows else '<tr><td class="muted">No records.</td></tr>'
+        return (
+            f'<table id="{esc(table_id)}" class="{esc(classes)}">'
+            f"<thead><tr>{head}</tr></thead>"
+            f"<tbody>{''.join(out)}{empty}</tbody></table>"
+        )
+
+    def _html_gauge(self, label, score, band) -> str:
+        esc = self._html_escape
+        try:
+            pct = max(0.0, min(100.0, float(score or 0)))
+        except (TypeError, ValueError):
+            pct = 0.0
+        color = {
+            "CRITICAL": "#c0392b", "HIGH": "#c0392b", "ELEVATED": "#e67e22",
+            "MEDIUM": "#e67e22", "MODERATE": "#e67e22", "LOW": "#27ae60",
+            "MINIMAL": "#27ae60",
+        }.get(str(band).upper(), "#2c3e50")
+        return (
+            f'<div class="gauge"><div class="lab"><span>{esc(label)}</span>'
+            f'<span><b>{esc(band)}</b> {pct:.0f}/100</span></div>'
+            f'<div class="track"><div class="fill" style="width:{pct:.0f}%;'
+            f'background:{color}"></div></div></div>'
+        )
+
+    def generate_html_report(self, case_id: UUID, json_package: dict) -> bytes:
+        """Render a self-contained, searchable, interactive HTML report.
+
+        A human-friendly *view* of the same data captured in the signed JSON
+        package; every attacker-controllable string is HTML-escaped. No external
+        assets, so it opens offline in any browser.
+        """
+        esc = self._html_escape
+        case = json_package.get("case") or {}
+        intel = json_package.get("intelligence_assessment") or {}
+        dossier = json_package.get("subject_dossier") or {}
+        summary = json_package.get("summary") or {}
+        links = json_package.get("identity_links") or []
+        evidence = json_package.get("evidence_units") or []
+        preservation = json_package.get("preservation_references") or []
+        audit = json_package.get("audit_log") or []
+        risk = intel.get("risk") or {}
+        expo = intel.get("exposure_score") or {}
+        generated = json_package.get("generated_at") or ""
+
+        cards = [
+            ("Evidence units", summary.get("total_evidence_units", len(evidence))),
+            ("Identity links", summary.get("total_identity_links", len(links))),
+            ("Confirmed", summary.get("confirmed_links", 0)),
+            ("HIGH", summary.get("high", 0)),
+            ("MEDIUM", summary.get("medium", 0)),
+            ("LOW", summary.get("low", 0)),
+        ]
+        cards_html = "".join(
+            f'<div class="card"><div class="n">{esc(v)}</div>'
+            f'<div class="l">{esc(l)}</div></div>'
+            for l, v in cards
+        )
+
+        hi, med, low = summary.get("high", 0), summary.get("medium", 0), summary.get("low", 0)
+        mx = max(hi, med, low, 1)
+
+        def _bar(label, n, color):
+            h = int(8 + (n / mx) * 104)
+            return (f'<div class="bar"><div>{esc(n)}</div>'
+                    f'<div class="col" style="height:{h}px;background:{color}"></div>'
+                    f'<div>{esc(label)}</div></div>')
+
+        bars = ('<div class="bars">' + _bar("HIGH", hi, "#c0392b")
+                + _bar("MEDIUM", med, "#e67e22") + _bar("LOW", low, "#f1c40f") + "</div>")
+        gauges = (self._html_gauge("Threat risk", risk.get("score"), risk.get("band"))
+                  + self._html_gauge("Footprint exposure", expo.get("score"), expo.get("band")))
+
+        def _narr(title, deterministic, ai):
+            block = f"<h3 style='margin:6px 0 4px;font-size:14px'>{esc(title)}</h3>"
+            if ai:
+                block += f'<div class="narr">{esc(ai)}<span class="ai-tag">AI DRAFT</span></div>'
+            if deterministic:
+                block += f'<div class="narr muted">{esc(deterministic)}</div>'
+            if not ai and not deterministic:
+                block += '<p class="muted">No narrative available.</p>'
+            return block
+
+        narratives = (_narr("Intelligence assessment", intel.get("narrative"), intel.get("ai_narrative"))
+                      + _narr("Subject dossier", dossier.get("summary"), dossier.get("ai_summary")))
+
+        link_rows, link_attrs = [], []
+        for l in links:
+            tier = str(l.get("confidence_tier") or "")
+            decision = str(l.get("analyst_decision") or "PENDING")
+            sigs = ", ".join(
+                k for k in (l.get("signal_breakdown") or {}) if not str(k).startswith("_")
+            )
+            link_rows.append([
+                ("raw", f'<span class="badge b-{esc(tier)}">{esc(tier)}</span>'),
+                f"{l.get('account_a','')} ({l.get('platform_a','')})",
+                f"{l.get('account_b','')} ({l.get('platform_b','')})",
+                l.get("confidence_score", ""),
+                l.get("signal_count", ""),
+                sigs,
+                ("raw", f'<span class="badge b-{esc(decision)}">{esc(decision)}</span>'),
+            ])
+            link_attrs.append({"data-tier": tier})
+        links_table = self._html_table(
+            "links-table",
+            ["Tier", "Account A", "Account B", "Score", "Signals", "Signal breakdown", "Decision"],
+            link_rows, link_attrs,
+        )
+
+        accounts = (intel.get("subject_profile") or {}).get("confirmed_accounts") or []
+        acct_rows = []
+        for a in accounts:
+            if isinstance(a, dict):
+                acct_rows.append([
+                    a.get("platform", ""),
+                    a.get("handle") or a.get("username") or a.get("value", ""),
+                    a.get("url", ""),
+                ])
+            else:
+                acct_rows.append([a, "", ""])
+        accounts_table = self._html_table("accounts-table", ["Platform", "Handle", "URL"], acct_rows)
+
+        ev_rows = [[
+            e.get("source_platform", ""), e.get("tool_name", ""), e.get("result_type", ""),
+            e.get("result_value", ""), str(e.get("timestamp_collected", ""))[:19],
+        ] for e in evidence]
+        evidence_table = self._html_table(
+            "evidence-table", ["Platform", "Tool", "Type", "Value", "Collected"], ev_rows)
+
+        pres_rows = [[
+            p.get("source_platform", ""), p.get("result_value", ""),
+            p.get("snapshot_hash", ""), p.get("wayback_ref", ""),
+        ] for p in preservation]
+        pres_table = self._html_table(
+            "pres-table", ["Platform", "Value", "Snapshot SHA-256", "Wayback"], pres_rows)
+
+        audit_rows = [[
+            str(x.get("created_at", ""))[:19], x.get("event_type", ""), x.get("actor_id", ""),
+        ] for x in audit]
+        audit_table = self._html_table("audit-table", ["Timestamp", "Event", "Actor"], audit_rows)
+
+        def _section(title, inner, collapsed=False):
+            cls = " class='collapsed'" if collapsed else ""
+            return f"<section{cls}><h2>{title}</h2><div class='body'>{inner}</div></section>"
+
+        controls = (
+            '<div class="controls"><input id="q" placeholder="Search all tables..." />'
+            '<button class="fbtn active" data-tier="ALL">All</button>'
+            '<button class="fbtn" data-tier="HIGH">High</button>'
+            '<button class="fbtn" data-tier="MEDIUM">Medium</button>'
+            '<button class="fbtn" data-tier="LOW">Low</button></div>'
+        )
+        case_kv = "".join(
+            f"<dt>{esc(k)}</dt><dd>{esc(case.get(k, ''))}</dd>"
+            for k in ("case_id", "authority_id", "agency_id", "analyst_id", "target_category",
+                      "jurisdiction", "seed_type", "seed_value", "created_at")
+            if case.get(k) is not None
+        )
+
+        body = (
+            '<div class="wrap">'
+            '<div class="disclaimer">Lawful OSINT assessment for an authorised investigation. '
+            'All inferences are investigative leads requiring independent verification — not '
+            'determinations of identity or guilt. The authoritative, integrity-signed artifacts '
+            'are the JSON package and PDF (bundle SHA-256).</div>'
+            f'<div class="cards">{cards_html}</div>'
+            + _section("Case metadata", f'<dl class="kv">{case_kv}</dl>')
+            + _section("Risk &amp; exposure", gauges + bars)
+            + _section("Narratives", narratives)
+            + _section("Identity links", controls + links_table)
+            + _section("Confirmed accounts", accounts_table)
+            + _section("Evidence units", evidence_table, collapsed=True)
+            + _section("Preservation references", pres_table, collapsed=True)
+            + _section("Audit log", audit_table, collapsed=True)
+            + "</div>"
+        )
+
+        title = f"SOCMINT Report — {esc(case.get('seed_value') or case_id)}"
+        html_doc = (
+            "<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'>"
+            "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+            f"<title>{title}</title><style>{_HTML_CSS}</style></head><body>"
+            "<header><h1>SOCMINT Intelligence Report</h1>"
+            f"<div class='meta'>Case {esc(case.get('case_id') or case_id)} &nbsp;·&nbsp; "
+            f"Subject seed: {esc(case.get('seed_value') or '—')} &nbsp;·&nbsp; "
+            f"Generated {esc(generated)}</div></header>"
+            f"{body}"
+            "<footer>Generated by SOCMINT · Interactive view of the signed evidence package · "
+            "Search, sort (click headers) and filter are client-side only.</footer>"
+            f"<script>{_HTML_JS}</script></body></html>"
+        )
+        return html_doc.encode("utf-8")
+
     def sign_bundle(self, json_bytes: bytes, pdf_bytes: bytes) -> str:
         """SHA-256 over the concatenation of the JSON and PDF bytes."""
         return hashlib.sha256(json_bytes + pdf_bytes).hexdigest()
 
-    def save_outputs(self, case_id: UUID, json_bytes: bytes, pdf_bytes: bytes, hash_str: str) -> dict:
-        """Store the three outputs to MinIO and a local case directory."""
+    def save_outputs(self, case_id: UUID, json_bytes: bytes, pdf_bytes: bytes, hash_str: str,
+                     html_bytes: bytes | None = None) -> dict:
+        """Store the outputs to MinIO and a local case directory."""
         prefix = f"cases/{case_id}/reports"
         minio_paths = {
             "json": f"{prefix}/{case_id}_report.json",
@@ -439,6 +779,9 @@ class ReportGenerator:
         minio_client.put_bytes(minio_paths["json"], json_bytes, "application/json")
         minio_client.put_bytes(minio_paths["pdf"], pdf_bytes, "application/pdf")
         minio_client.put_bytes(minio_paths["sha256"], hash_str.encode("utf-8"), "text/plain")
+        if html_bytes is not None:
+            minio_paths["html"] = f"{prefix}/{case_id}_report.html"
+            minio_client.put_bytes(minio_paths["html"], html_bytes, "text/html; charset=utf-8")
 
         local_dir = os.path.join(get_settings().cases_dir, str(case_id))
         os.makedirs(local_dir, exist_ok=True)
@@ -448,5 +791,8 @@ class ReportGenerator:
             handle.write(pdf_bytes)
         with open(os.path.join(local_dir, f"{case_id}_bundle.sha256"), "w", encoding="utf-8") as handle:
             handle.write(hash_str)
+        if html_bytes is not None:
+            with open(os.path.join(local_dir, f"{case_id}_report.html"), "wb") as handle:
+                handle.write(html_bytes)
 
         return {"minio": minio_paths, "local_dir": local_dir, "bundle_sha256": hash_str}

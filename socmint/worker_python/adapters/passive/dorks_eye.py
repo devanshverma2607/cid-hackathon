@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 
-from worker_python.adapters._net import ddg_search
+from worker_python.adapters._net import ddg_search, select_dorks
 from worker_python.adapters.base import ToolAdapter
 from api.models.evidence import EvidenceUnit
 
@@ -17,12 +17,32 @@ from api.models.evidence import EvidenceUnit
 class DorksEyeAdapter(ToolAdapter):
     """Public-footprint dorking for {seed} via DuckDuckGo (Tor, direct fallback)."""
 
-    DORKS = (
+    MAX_DORKS = 6
+
+    # Generic footprint dorks (run for every seed type).
+    BASE_DORKS = (
         '"{q}"',
-        'intext:"{q}" (site:github.com OR site:gitlab.com OR site:reddit.com)',
-        '"{q}" (site:linkedin.com OR site:twitter.com OR site:facebook.com '
-        "OR site:instagram.com OR site:t.me)",
+        '"{q}" (site:linkedin.com OR site:twitter.com OR site:x.com '
+        "OR site:facebook.com OR site:instagram.com OR site:t.me OR site:reddit.com)",
         '"{q}" (filetype:pdf OR filetype:xlsx OR filetype:doc OR filetype:csv)',
+    )
+    # Handle-centric: profile pages, link aggregators, dev/community platforms.
+    USERNAME_DORKS = (
+        'intext:"{q}" (site:github.com OR site:gitlab.com OR site:medium.com OR site:reddit.com)',
+        'inurl:{q} (site:about.me OR site:keybase.io OR site:linktr.ee OR site:gravatar.com)',
+        '"{q}" (intitle:profile OR intext:"user profile" OR intext:"member since")',
+    )
+    # Email-centric: contact pages, code commits, people-search aggregators.
+    EMAIL_DORKS = (
+        '"{q}" (site:github.com OR site:gist.github.com OR site:gitlab.com)',
+        '"{q}" (intext:contact OR intext:email OR intext:"reach me" OR intext:"get in touch")',
+        '"{q}" (site:hunter.io OR site:rocketreach.co OR site:apollo.io OR site:signalhire.com)',
+    )
+    # Phone-centric: caller-ID directories, messaging/contact pages.
+    PHONE_DORKS = (
+        '"{q}" (intext:whatsapp OR intext:telegram OR intext:contact OR intext:mobile)',
+        '"{q}" (site:truecaller.com OR site:whocallsme.com OR site:sync.me OR site:shouldianswer.com)',
+        '"{q}" (intext:phone OR intext:"call me" OR intext:"reach me")',
     )
 
     def name(self) -> str:
@@ -46,7 +66,12 @@ class DorksEyeAdapter(ToolAdapter):
             return []
         seen: set[str] = set()
         out: list[dict] = []
-        for template in self.DORKS:
+        dorks = select_dorks(
+            seed, self.BASE_DORKS,
+            {"username": self.USERNAME_DORKS, "email": self.EMAIL_DORKS, "phone": self.PHONE_DORKS},
+            self.MAX_DORKS,
+        )
+        for template in dorks:
             query = template.format(q=seed)
             for hit in ddg_search(query, max_results=10, use_tor=True):
                 url = hit.get("url", "")

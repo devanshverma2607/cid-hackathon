@@ -72,6 +72,8 @@ CREATE TABLE IF NOT EXISTS evidence_units (
     confidence_raw       FLOAT,
     signal_weights       JSONB,
     bio_embedding        vector(384),            -- pgvector semantic similarity
+    image_embedding      vector(512),            -- pgvector CLIP avatar similarity
+    face_embedding       vector(512),            -- pgvector FaceNet face similarity
     timestamp_collected  TIMESTAMPTZ NOT NULL,
     timestamp_preserved  TIMESTAMPTZ,
     snapshot_ref         TEXT,
@@ -92,6 +94,15 @@ CREATE INDEX IF NOT EXISTS idx_evidence_platform_value
 -- Deduplication key (mirrors the UNIQUE constraint, used by upsert/ON CONFLICT)
 CREATE UNIQUE INDEX IF NOT EXISTS uq_evidence_dedup
     ON evidence_units (case_id, source_platform, result_value, seed_value);
+
+-- Backfill for pre-existing databases (CREATE TABLE above only adds the column
+-- on a fresh schema). CLIP ViT-B/32 avatar embeddings are 512-dimensional.
+ALTER TABLE evidence_units
+    ADD COLUMN IF NOT EXISTS image_embedding vector(512);
+
+-- FaceNet (InceptionResnetV1/vggface2) face embeddings are 512-dimensional.
+ALTER TABLE evidence_units
+    ADD COLUMN IF NOT EXISTS face_embedding vector(512);
 
 
 -- -----------------------------------------------------------------------------

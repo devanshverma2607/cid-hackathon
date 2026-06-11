@@ -20,7 +20,9 @@ It is deliberately self-contained and fast (pure Python, no ML model load):
 from __future__ import annotations
 
 import difflib
+import math
 import re
+from collections import defaultdict
 from datetime import datetime
 from typing import Optional
 from urllib.parse import unquote
@@ -44,6 +46,20 @@ W_BIO_SIM = 6  # soft
 # An edge merges two accounts when it carries a hard identifier OR clears this.
 MERGE_THRESHOLD = 18
 
+# Cap the edge list returned to clients. The full pairwise set is used
+# internally for clustering, but a case with hundreds of accounts produces tens
+# of thousands of edges — far too many to ship over the wire or render. We
+# return a bounded, visualisation-friendly subset (merge edges first, then the
+# strongest corroborating edges) so the payload stays small and the persona
+# scores/signal counts (computed from the full set) remain exact.
+_MAX_PUBLIC_EDGES = 1200
+
+# Alternative-hypothesis tuning: a cross-persona near-miss is only worth showing
+# when it carries a meaningful (hard, or >= this weight) signal, and we cap how
+# many competing hypotheses we surface per persona to keep the payload small.
+_HYPOTHESIS_MIN_WEIGHT = 8
+_MAX_HYPOTHESES_PER_PERSONA = 3
+
 HARD_SIGNALS = {
     "shared_email", "shared_phone", "shared_username",
     "photo_match", "handle_email_match", "shared_url",
@@ -52,6 +68,8 @@ HARD_SIGNALS = {
 USERNAME_SIM_THRESHOLD = 0.86
 BIO_SIM_THRESHOLD = 0.60
 PHASH_MAX_DISTANCE = 8
+IMAGE_SIM_THRESHOLD = 0.92   # CLIP cosine: same avatar re-encoded/resized/cropped
+FACE_SIM_THRESHOLD = 0.62    # FaceNet cosine: same person, different photo
 
 # enrichment keys to mine for identifiers
 _EMAIL_KEYS = ("email", "public_email")
@@ -107,6 +125,33 @@ def _display_username(value: str) -> str:
     return (value or "").lstrip("@").strip().lower()
 
 
+def _calibrate_persona(score: float) -> float:
+    """Persona score (0-99) → calibrated [0,1] confidence (logistic centred @50)."""
+    return round(1.0 / (1.0 + math.exp(-0.06 * (score - 50.0))), 4)
+
+
+def _cosine(v1: list[float], v2: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(v1, v2))
+    n1 = math.sqrt(sum(x * x for x in v1))
+    n2 = math.sqrt(sum(y * y for y in v2))
+    return dot / (n1 * n2) if n1 and n2 else 0.0
+
+
+def _parse_vector(value) -> Optional[list[float]]:
+    """Parse a pgvector column value (str '[..]' / list / None) into floats."""
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)):
+        return [float(x) for x in value] or None
+    text_val = str(value).strip().strip("[]")
+    if not text_val:
+        return None
+    try:
+        return [float(x) for x in text_val.split(",") if x.strip()] or None
+    except ValueError:
+        return None
+
+
 class PersonaResolver:
     """Cluster a case's accounts into confidence-scored human personas."""
 
@@ -116,9 +161,10 @@ class PersonaResolver:
             text(
                 "SELECT evidence_id, tool_name, source_platform, seed_type, "
                 "seed_value, result_type, result_value, platform_enrichment, "
-                "timestamp_collected "
+                "image_embedding, face_embedding, timestamp_collected "
                 "FROM evidence_units WHERE case_id = :cid "
                 "AND result_type NOT IN ('unavailable','blocked','dork_hit','archive_hit') "
+                "AND COALESCE(notes, '') NOT LIKE '[candidate-email]%' "
                 "ORDER BY timestamp_collected"
             ),
             {"cid": str(case_id)},
@@ -154,6 +200,8 @@ class PersonaResolver:
                     "phones": set(),
                     "ext_urls": set(),
                     "phashes": set(),
+                    "image_embeddings": [],
+                    "face_embeddings": [],
                     "bio": None,
                     "tools": set(),
                     "result_types": set(),
@@ -209,6 +257,13 @@ class PersonaResolver:
         # bridges username clusters to email clusters — decode and split it.
         self._ingest_handle(acc, handle_raw)
 
+        emb = _parse_vector(unit.get("image_embedding"))
+        if emb:
+            acc["image_embeddings"].append(emb)
+        face = _parse_vector(unit.get("face_embedding"))
+        if face:
+            acc["face_embeddings"].append(face)
+
         enrich = unit.get("platform_enrichment")
         if not isinstance(enrich, dict):
             return
@@ -259,6 +314,26 @@ class PersonaResolver:
         except Exception:  # noqa: BLE001
             return bool(a & b)
 
+    def _embedding_match(self, a: list, b: list) -> bool:
+        """True when any CLIP avatar embedding pair is the same image (cosine high)."""
+        if not a or not b:
+            return False
+        for x in a:
+            for y in b:
+                if x and y and len(x) == len(y) and _cosine(x, y) >= IMAGE_SIM_THRESHOLD:
+                    return True
+        return False
+
+    def _face_match(self, a: list, b: list) -> bool:
+        """True when any FaceNet embedding pair is the same person (cosine high)."""
+        if not a or not b:
+            return False
+        for x in a:
+            for y in b:
+                if x and y and len(x) == len(y) and _cosine(x, y) >= FACE_SIM_THRESHOLD:
+                    return True
+        return False
+
     def _score_pair(self, a: dict, b: dict) -> dict:
         reasons: list[dict] = []
         weight = 0
@@ -272,9 +347,11 @@ class PersonaResolver:
         if (shared := a["usernames"] & b["usernames"]):
             weight += W_SHARED_USERNAME
             reasons.append({"signal": "shared_username", "detail": sorted(shared)[0]})
-        if self._phash_match(a["phashes"], b["phashes"]):
+        if self._phash_match(a["phashes"], b["phashes"]) or self._embedding_match(
+            a["image_embeddings"], b["image_embeddings"]
+        ) or self._face_match(a["face_embeddings"], b["face_embeddings"]):
             weight += W_PHOTO_MATCH
-            reasons.append({"signal": "photo_match", "detail": "pHash ≤ 8"})
+            reasons.append({"signal": "photo_match", "detail": "pHash ≤ 8, CLIP or face match"})
 
         # username on one side equals the email local-part on the other
         bridge = self._handle_email_bridge(a, b) or self._handle_email_bridge(b, a)
@@ -373,15 +450,76 @@ class PersonaResolver:
         for idx, p in enumerate(personas, start=1):
             p["persona_id"] = f"P{idx}"
 
+        # Alternative hypotheses + per-persona confidence dashboard: strong
+        # cross-persona near-miss links that fell just short of merging.
+        self._attach_hypotheses(personas, edges, by_id)
+
         multi = [p for p in personas if p["account_count"] > 1]
+        public_edges = self._select_public_edges(edges, by_id)
         return {
             "case_id": str(case_id),
             "account_count": len(accounts),
             "persona_count": len(multi),
             "singleton_count": len(personas) - len(multi),
             "personas": personas,
-            "edges": [self._public_edge(e, by_id) for e in edges],
+            "edges": public_edges,
+            "edge_count": len(edges),
+            "edges_truncated": len(public_edges) < len(edges),
         }
+
+    def _attach_hypotheses(self, personas: list[dict], edges: list[dict], by_id: dict) -> None:
+        """Attach cross-persona near-miss links + a confidence dashboard.
+
+        A persona that did NOT merge with another but still shares a meaningful
+        signal is a lead the analyst should weigh: confirming it would fuse the
+        two clusters. We surface the single strongest such edge per persona
+        pair, capped per persona, plus a compact confidence summary.
+        """
+        acct_to_persona: dict[str, str] = {}
+        for p in personas:
+            for acc in p["accounts"]:
+                acct_to_persona[acc["id"]] = p["persona_id"]
+
+        best: dict[tuple, dict] = {}
+        for e in edges:
+            if e["merges"]:
+                continue
+            ps, pt = acct_to_persona.get(e["source"]), acct_to_persona.get(e["target"])
+            if not ps or not pt or ps == pt:
+                continue
+            if not e["hard"] and e["weight"] < _HYPOTHESIS_MIN_WEIGHT:
+                continue
+            key = tuple(sorted((ps, pt)))
+            if key not in best or e["weight"] > best[key]["weight"]:
+                best[key] = e
+
+        per_persona: dict[str, list[dict]] = defaultdict(list)
+        for (pa, pb), e in best.items():
+            shared = {
+                "weight": e["weight"],
+                "hard": e["hard"],
+                "merge_gap": 0.0 if e["hard"] else round(MERGE_THRESHOLD - e["weight"], 1),
+                "source_label": by_id[e["source"]]["label"],
+                "target_label": by_id[e["target"]]["label"],
+                "reasons": [{"signal": r["signal"],
+                             "label": _SIGNAL_LABELS.get(r["signal"], r["signal"]),
+                             "detail": r["detail"]} for r in e["reasons"]],
+            }
+            per_persona[pa].append({**shared, "with_persona": pb})
+            per_persona[pb].append({**shared, "with_persona": pa})
+
+        for p in personas:
+            hyps = sorted(per_persona.get(p["persona_id"], []),
+                          key=lambda h: h["weight"], reverse=True)[:_MAX_HYPOTHESES_PER_PERSONA]
+            p["alternative_hypotheses"] = hyps
+            p["confidence"] = {
+                "tier": p["confidence_tier"],
+                "score": p["score"],
+                "probability": p.get("probability", _calibrate_persona(p["score"])),
+                "strongest_signal": p["linking_signals"][0] if p["linking_signals"] else None,
+                "signal_diversity": len(p["linking_signals"]),
+                "competing_hypotheses": len(hyps),
+            }
 
     def _summarise(self, members: list[dict], internal: list[dict]) -> dict:
         n = len(members)
@@ -459,6 +597,7 @@ class PersonaResolver:
             "platforms": platforms,
             "confidence_tier": tier,
             "score": score,
+            "probability": _calibrate_persona(score),
             "pivot_identifier": ({"kind": pivot_out[0], "value": pivot_out[1]} if pivot_out else None),
             "shared_identifiers": {
                 "emails": sorted(shared_emails),
@@ -508,3 +647,21 @@ class PersonaResolver:
                          "label": _SIGNAL_LABELS.get(r["signal"], r["signal"]),
                          "detail": r["detail"]} for r in e["reasons"]],
         }
+
+    def _select_public_edges(self, edges: list[dict], by_id: dict) -> list[dict]:
+        """Bounded, render-friendly edge subset.
+
+        Merge edges (the cluster backbone) are kept first, then the strongest
+        soft edges, capped at ``_MAX_PUBLIC_EDGES``. The full edge set still
+        drives clustering and the per-persona signal counts, so capping the
+        exported list never changes a persona's score or membership.
+        """
+        if len(edges) <= _MAX_PUBLIC_EDGES:
+            ordered = edges
+        else:
+            merge = sorted((e for e in edges if e["merges"]),
+                           key=lambda e: e["weight"], reverse=True)
+            soft = sorted((e for e in edges if not e["merges"]),
+                          key=lambda e: e["weight"], reverse=True)
+            ordered = (merge + soft)[:_MAX_PUBLIC_EDGES]
+        return [self._public_edge(e, by_id) for e in ordered]

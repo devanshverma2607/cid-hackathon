@@ -22,7 +22,7 @@ def run_platform_enrichment(
 ) -> dict:
     """Trigger the platform tool matrix, attach enrichment, and preserve."""
     from api.db.postgres import session_scope
-    from api.services.provenance import ProvenanceService
+    from api.services.provenance import ProvenanceService, _vector_literal
 
     case_uuid = UUID(case_id)
     run_uuid = UUID(run_id)
@@ -53,20 +53,45 @@ def run_platform_enrichment(
     # Screenshot + Wayback preservation runs inside preserve_and_persist for hits.
     count = preserve_and_persist(units)
 
-    # Attach enrichment payloads back onto matching evidence rows.
+    # Attach enrichment payloads back onto matching evidence rows. The CLIP
+    # reverse-image embedding and the FaceNet face embedding are split out of the
+    # JSONB into their own pgvector columns — keeping the enrichment payload lean
+    # while making both available for the photo-match signal + reverse search.
     provenance = ProvenanceService()
     with session_scope() as session:
         for unit in units:
-            if unit.platform_enrichment:
-                row = session.execute(
+            if not unit.platform_enrichment:
+                continue
+            row = session.execute(
+                text(
+                    "SELECT evidence_id FROM evidence_units "
+                    "WHERE case_id = :cid AND source_platform = :p AND result_value = :rv "
+                    "LIMIT 1"
+                ),
+                {"cid": case_id, "p": unit.source_platform, "rv": unit.result_value},
+            ).first()
+            if not row:
+                continue
+            embedding = unit.platform_enrichment.pop("image_embedding", None)
+            face = unit.platform_enrichment.pop("face_embedding", None)
+            provenance.attach_enrichment(row[0], unit.platform_enrichment, session)
+            if embedding:
+                session.execute(
                     text(
-                        "SELECT evidence_id FROM evidence_units "
-                        "WHERE case_id = :cid AND source_platform = :p AND result_value = :rv "
-                        "LIMIT 1"
+                        "UPDATE evidence_units SET image_embedding = CAST(:v AS vector) "
+                        "WHERE evidence_id = :id"
                     ),
-                    {"cid": case_id, "p": unit.source_platform, "rv": unit.result_value},
-                ).first()
-                if row:
-                    provenance.attach_enrichment(row[0], unit.platform_enrichment, session)
+                    {"v": _vector_literal(embedding), "id": str(row[0])},
+                )
+                session.commit()
+            if face:  # non-empty list only (a [] sentinel means "no face found")
+                session.execute(
+                    text(
+                        "UPDATE evidence_units SET face_embedding = CAST(:v AS vector) "
+                        "WHERE evidence_id = :id"
+                    ),
+                    {"v": _vector_literal(face), "id": str(row[0])},
+                )
+                session.commit()
 
     return {"tier": 4, "platform": platform, "hits": count}

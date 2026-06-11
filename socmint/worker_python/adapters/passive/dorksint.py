@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 
-from worker_python.adapters._net import ddg_search
+from worker_python.adapters._net import ddg_search, select_dorks
 from worker_python.adapters.base import ToolAdapter
 from api.models.evidence import EvidenceUnit
 
@@ -16,12 +16,30 @@ from api.models.evidence import EvidenceUnit
 class DorksintAdapter(ToolAdapter):
     """Exposure/leak dorking for {seed} via DuckDuckGo (Tor, direct fallback)."""
 
-    DORKS = (
+    MAX_DORKS = 6
+
+    # Generic exposure dorks (run for every seed type).
+    BASE_DORKS = (
         '"{q}" (intext:password OR intext:passwd OR intext:credentials)',
         '"{q}" (ext:txt OR ext:log OR ext:env OR ext:sql OR ext:json OR ext:csv)',
-        '"{q}" (site:pastebin.com OR site:trello.com OR site:s3.amazonaws.com '
-        "OR site:gist.github.com)",
+        '"{q}" (site:pastebin.com OR site:ghostbin.com OR site:rentry.co '
+        "OR site:gist.github.com OR site:controlc.com)",
+    )
+    # Email-centric: breach/leak/dump mentions and paste-site exposure.
+    EMAIL_DORKS = (
+        '"{q}" (intext:"data breach" OR intext:leaked OR intext:dump OR intext:combolist)',
+        '"{q}" (site:pastebin.com OR site:throwbin.io OR site:psbdmp.ws OR site:dpaste.org)',
+        '"{q}" (ext:sql OR ext:env OR ext:json) (intext:email OR intext:user OR intext:login)',
+    )
+    # Username-centric: secret/token leaks in code and config dumps.
+    USERNAME_DORKS = (
         'intext:"{q}" (intext:api_key OR intext:secret OR intext:token OR intext:apikey)',
+        '"{q}" (site:gist.github.com OR site:pastebin.com) (intext:config OR intext:".env")',
+    )
+    # Phone-centric: leaked databases / contact dumps.
+    PHONE_DORKS = (
+        '"{q}" (intext:leaked OR intext:dump OR intext:database OR intext:breach)',
+        '"{q}" (site:pastebin.com OR site:psbdmp.ws) (intext:phone OR intext:contact OR intext:sms)',
     )
 
     def name(self) -> str:
@@ -45,7 +63,12 @@ class DorksintAdapter(ToolAdapter):
             return []
         seen: set[str] = set()
         out: list[dict] = []
-        for template in self.DORKS:
+        dorks = select_dorks(
+            seed, self.BASE_DORKS,
+            {"username": self.USERNAME_DORKS, "email": self.EMAIL_DORKS, "phone": self.PHONE_DORKS},
+            self.MAX_DORKS,
+        )
+        for template in dorks:
             query = template.format(q=seed)
             for hit in ddg_search(query, max_results=10, use_tor=True):
                 url = hit.get("url", "")

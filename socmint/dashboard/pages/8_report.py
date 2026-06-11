@@ -50,17 +50,22 @@ if st.button("Generate Signed Bundle", type="primary"):
         st.error(f"Generation failed: {resp.text}")
 
 st.subheader("Downloads")
-d1, d2, d3 = st.columns(3)
-for col, kind, label, mime in (
-    (d1, "json", "JSON Package", "application/json"),
-    (d2, "pdf", "PDF Report", "application/pdf"),
-    (d3, "sha256", "SHA-256 Manifest", "text/plain"),
+d1, d2, d3, d4 = st.columns(4)
+for col, kind, label, mime, fname in (
+    (d1, "json", "JSON Package", "application/json", f"{case_id}_report.json"),
+    (d2, "pdf", "PDF Report", "application/pdf", f"{case_id}_report.pdf"),
+    (d3, "html", "Interactive HTML", "text/html", f"{case_id}_report.html"),
+    (d4, "sha256", "SHA-256 Manifest", "text/plain", f"{case_id}_bundle.sha256"),
 ):
     content = api_get_bytes(f"/api/v1/reports/download/{case_id}/{kind}")
     if content:
         col.download_button(
-            label, data=content, file_name=f"{case_id}_{kind}", mime=mime,
+            label, data=content, file_name=fname, mime=mime,
             key=f"dl_{kind}", use_container_width=True,
         )
     else:
         col.caption(f"{label}: not generated yet")
+st.caption(
+    "The interactive HTML is a searchable, sortable view of the same data; the "
+    "JSON + PDF (with the SHA-256 manifest) remain the authoritative signed artifacts."
+)

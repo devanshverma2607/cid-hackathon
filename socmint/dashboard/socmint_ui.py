@@ -87,10 +87,13 @@ def case_label(case: dict) -> str:
 def case_selector(label: str = "Active case", *, sidebar: bool = False) -> str:
     """Render the case picker and return the chosen case id.
 
-    The selectbox is *controlled* by ``st.session_state['active_case_id']`` (it
-    uses that as its widget key), so case intake, the manual-paste fallback, and
-    the picker all share one source of truth without fighting each other. An
-    externally-set case stays selectable even if it is not in the list yet.
+    The active case lives in the *plain* session-state key ``active_case_id``
+    (deliberately NOT the selectbox's widget key). Streamlit clears widget-key
+    state when you navigate between pages, so binding the picker directly to
+    ``active_case_id`` made it forget the manual selection and snap back to the
+    newest case on every tab change. Keeping it in a plain key — and seeding a
+    keyless selectbox from it via ``index`` each run — survives navigation,
+    while case intake and the manual-paste fallback can still set it freely.
     """
     container = st.sidebar if sidebar else st
     cases = fetch_cases()
@@ -114,15 +117,18 @@ def case_selector(label: str = "Active case", *, sidebar: bool = False) -> str:
         container.caption("No cases yet — open one in **Case Intake**.")
         return ""
 
-    # Ensure the controlled value is always a valid option before instantiation.
-    if st.session_state.get("active_case_id") not in ids:
-        st.session_state["active_case_id"] = ids[0]
+    # Default to the newest case only when nothing valid is selected yet.
+    if current not in ids:
+        current = ids[0]
+        st.session_state["active_case_id"] = current
 
-    container.selectbox(
-        label, ids, key="active_case_id",
+    chosen = container.selectbox(
+        label, ids, index=ids.index(current),
         format_func=lambda cid: labels.get(cid, cid),
     )
-    return st.session_state["active_case_id"]
+    if chosen != st.session_state.get("active_case_id"):
+        st.session_state["active_case_id"] = chosen
+    return chosen
 
 
 def require_case(case_id: str) -> None:

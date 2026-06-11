@@ -30,8 +30,17 @@ services:
     image: neo4j:5-community
     environment:
       NEO4J_AUTH: neo4j/${NEO4J_PASSWORD}
+      # Graph Data Science plugin enables Louvain community detection. The JAR is
+      # provisioned directly via the ./neo4j/plugins bind-mount below (compatible
+      # GDS build for this Neo4j version) rather than Neo4j's CDN auto-downloader,
+      # so it works in network-restricted/offline deployments. The GraphBuilder
+      # still degrades to an in-process label-propagation fallback if the plugin
+      # is ever absent, so this remains an enhancement, not a hard dependency.
+      NEO4J_dbms_security_procedures_unrestricted: gds.*
+      NEO4J_dbms_security_procedures_allowlist: gds.*
     volumes:
       - neo4jdata:/data
+      - ./neo4j/plugins:/plugins        # GDS plugin JAR (offline-provisioned)
     ports:
       - "7474:7474"   # Browser UI
       - "7687:7687"   # Bolt protocol
@@ -104,6 +113,16 @@ services:
       # The Go OSINT binaries (enola, DetectDee, email2whatsapp, ...) are
       # compiled in the worker_go image and shared in via the go_tools volume.
       GO_TOOLS_DIR: /opt/go_tools
+      # Persist the Hugging Face model cache (CLIP avatar + bio embeddings) so
+      # the ~600 MB CLIP model downloads once, not on every container restart.
+      HF_HOME: /root/.cache/huggingface
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
+      LLM_NARRATIVES_ENABLED: ${LLM_NARRATIVES_ENABLED:-1}
+      # Face recognition (FaceNet) links the same person across different photos.
+      # Disable with FACE_RECOGNITION=0; degrades gracefully if weights missing.
+      FACE_RECOGNITION: ${FACE_RECOGNITION:-1}
+      TORCH_HOME: /root/.cache/torch
     command: celery -A worker_python.celery_app worker --loglevel=info --concurrency=4
     depends_on:
       postgres:
@@ -124,6 +143,8 @@ services:
       # /tools/python; do NOT bind-mount over it or the cloned tools vanish.
       - go_tools:/opt/go_tools:ro            # compiled Go binaries from worker_go
       - evidence_cases:/app/cases
+      - hf_cache:/root/.cache/huggingface    # persist CLIP/MiniLM model cache
+      - torch_cache:/root/.cache/torch       # persist FaceNet weights
     restart: unless-stopped
 
   # ----------------------------------------------------------------------
@@ -165,6 +186,10 @@ services:
       context: .
       dockerfile: api/Dockerfile
     env_file: .env
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
+      LLM_NARRATIVES_ENABLED: ${LLM_NARRATIVES_ENABLED:-1}
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000
     depends_on:
       postgres:
@@ -202,9 +227,44 @@ services:
       - ./dashboard:/app/dashboard
     restart: unless-stopped
 
+  # ----------------------------------------------------------------------
+  # Ollama — local LLM runtime for grounded narrative generation (optional).
+  # Narratives degrade gracefully to deterministic text when this service is
+  # absent or still pulling its model, so nothing in the pipeline hard-depends
+  # on it (no other service lists it under depends_on).
+  # ----------------------------------------------------------------------
+  ollama:
+    image: ollama/ollama:latest
+    environment:
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
+    # Serve in the background, wait for readiness, pull the model once (cached in
+    # the named volume), then keep the server in the foreground.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        ollama serve &
+        pid=$$!
+        until ollama list >/dev/null 2>&1; do sleep 1; done
+        ollama pull ${OLLAMA_MODEL:-llama3.2:3b} || echo "WARN: ollama model pull failed; narratives degrade to deterministic"
+        wait $$pid
+    volumes:
+      - ollama_models:/root/.ollama
+    ports:
+      - "11434:11434"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
 volumes:
   pgdata:
   neo4jdata:
   miniodata:
   evidence_cases:
   go_tools:
+  hf_cache:
+  ollama_models:
+  torch_cache:

@@ -86,6 +86,21 @@ with hcol2:
     if profile.get("summary"):
         st.markdown(f"<p style='color:#cfd4da;margin-top:8px'>{profile['summary']}</p>",
                     unsafe_allow_html=True)
+    # AI draft summary is optional + slower (local LLM): fetch on demand so the
+    # dossier renders immediately. Expanded by default so the button is visible.
+    _ai_key = f"ai_summary_{case_id}"
+    with st.expander("🤖 AI narrative summary (optional local-LLM draft)", expanded=True):
+        st.caption("A fluent, plain-language summary of the dossier below — generated "
+                   "by a local LLM, grounded only in the collected evidence. An analyst "
+                   "aid requiring verification, not a determination.")
+        if st.button("✨ Generate AI summary", key="gen_ai_summary", type="primary"):
+            with st.spinner("Generating with local LLM…"):
+                resp = api_get(f"/api/v1/dossier/{case_id}/ai-summary", timeout=120)
+            st.session_state[_ai_key] = (resp or {}).get("ai_summary") or (
+                "_Local LLM unavailable — the deterministic summary above still applies._"
+            )
+        if st.session_state.get(_ai_key):
+            st.markdown(st.session_state[_ai_key])
 
 st.divider()
 
@@ -160,6 +175,13 @@ with acol:
     render_attr("Languages", attrs.get("languages"))
     render_attr("Affiliations", attrs.get("affiliations"))
 
+    _has_attrs = any(attrs.get(k) for k in
+                     ("names", "locations", "occupation", "languages", "affiliations"))
+    if not _has_attrs:
+        st.caption("No real-world attributes could be inferred yet — the collected "
+                   "evidence carries no name, location, occupation, language, or "
+                   "affiliation signals. Identifiers and behaviour are shown below.")
+
     meta_bits = []
     if attrs.get("timezone"):
         meta_bits.append(f"🕓 {attrs['timezone']}")
@@ -178,7 +200,7 @@ with acol:
 with icol:
     st.subheader("Confirmed Identity")
     ident = profile.get("identity", {})
-    for key, icon in (("emails", "✉️"), ("phones", "📱"), ("usernames", "👤")):
+    for key, icon in (("emails", "✉️"), ("usernames", "👤")):
         vals = ident.get(key, [])
         if vals:
             st.markdown(f"**{icon} {key.capitalize()}**")
@@ -187,10 +209,96 @@ with icol:
                 obs = item.get("observations") if isinstance(item, dict) else None
                 suffix = f"  ·  seen {obs}×" if obs and obs > 1 else ""
                 st.markdown(f"- `{val}`{suffix}")
+
+    # Contact numbers recovered from linked accounts (Instagram/WhatsApp/Telegram/
+    # phoneinfoga). Full numbers are real leads; masked ones are flagged partial.
+    contacts = attrs.get("contact_numbers", [])
+    if contacts:
+        st.markdown("**📞 Contact numbers**")
+        for c in contacts[:6]:
+            tag = " _(masked / partial)_" if c.get("obfuscated") else ""
+            region = f"  ·  {c['region']}" if c.get("region") else ""
+            via = ", ".join(c.get("sources", [])[:3])
+            via_txt = f"  ·  via {via}" if via else ""
+            st.markdown(f"- `{c.get('value', '')}`{tag}{region}{via_txt}")
+
+    # Candidate emails guessed from the subject's username (e.g. username@gmail.com)
+    # and confirmed in-use by holehe. Ownership is UNCONFIRMED — surfaced as leads.
+    cand_emails = attrs.get("candidate_emails", [])
+    if cand_emails:
+        st.markdown("**🧩 Candidate emails** _(derived from username · unconfirmed)_")
+        for c in cand_emails[:6]:
+            plats = ", ".join(c.get("platforms", [])[:5])
+            plats_txt = f"  ·  registered on {plats}" if plats else ""
+            st.markdown(f"- `{c.get('value', '')}`{plats_txt}")
+        st.caption(
+            "Guessed from the username and verified in-use via holehe — "
+            "treat as leads; ownership is not confirmed."
+        )
     if ident.get("verified_on"):
         st.caption("Verified on: " + ", ".join(ident["verified_on"][:8]))
 
 st.divider()
+
+# ---------------------------------------------------------------------------
+# Geolocation — EXIF GPS fixes + inferred activity timezone
+# ---------------------------------------------------------------------------
+geos = attrs.get("geolocations") or []
+activity = (profile.get("temporal") or {}).get("activity_pattern")
+if geos or activity:
+    st.subheader("📍 Geolocation")
+    gcol1, gcol2 = st.columns([3, 2])
+
+    with gcol1:
+        if geos:
+            st.markdown("**Image GPS fixes** _(EXIF — hard physical-location leads)_")
+            try:
+                import pandas as _pd
+                st.map(_pd.DataFrame(
+                    [{"lat": g["lat"], "lon": g["lon"]} for g in geos]
+                ), size=60)
+            except Exception:  # noqa: BLE001
+                pass
+            for g in geos[:6]:
+                plats = ", ".join(g.get("platforms", []))
+                cam = f" · 📷 {g['camera']}" if g.get("camera") else ""
+                when = f" · {g['captured_at']}" if g.get("captured_at") else ""
+                st.markdown(
+                    f"- [{g['lat']:.5f}, {g['lon']:.5f}]({g['maps_url']}) "
+                    f"({plats}){cam}{when}"
+                )
+            st.caption("Coordinates read from photo EXIF metadata. The strongest "
+                       "location signal available — still verify before acting.")
+        else:
+            st.caption("No GPS-tagged images were recovered.")
+
+    with gcol2:
+        if activity:
+            st.markdown("**Inferred timezone** _(from activity pattern)_")
+            st.metric(
+                activity.get("inferred_region", "—"),
+                f"UTC{activity.get('inferred_utc_offset', '')}",
+                help="Estimated from when the subject creates accounts / captures "
+                     "photos (UTC) — a soft geolocation lead.",
+            )
+            ac = activity.get("confidence", "low")
+            st.caption(
+                f"Confidence {ac} · {activity.get('sample_size', 0)} timestamps · "
+                f"quiet (likely sleep) {activity.get('quiet_window_utc', '?')} UTC"
+            )
+            try:
+                import pandas as _pd
+                st.bar_chart(
+                    _pd.DataFrame({"activity": activity.get("hours_utc", [])}),
+                    height=140,
+                )
+                st.caption("Activity by hour of day (UTC).")
+            except Exception:  # noqa: BLE001
+                pass
+        else:
+            st.caption("Not enough dated activity to infer a timezone "
+                       "(need ≥5 timestamps).")
+    st.divider()
 
 # ---------------------------------------------------------------------------
 # Behavioral fingerprint
@@ -215,6 +323,35 @@ if bf:
         st.markdown("**Naming style:** " + " · ".join(traits))
     for note in bf.get("style_notes", [])[:5]:
         st.markdown(f"- {note}")
+    st.divider()
+
+# ---------------------------------------------------------------------------
+# Behavioral indicators (inferred leads) + OPSEC posture
+# ---------------------------------------------------------------------------
+bi = profile.get("behavioral_indicators", {})
+if bi and (bi.get("indicators") or bi.get("operational_security")):
+    st.subheader("Behavioral Indicators")
+    _LEVEL_ICON = {"high": "🔴", "elevated": "🟠", "moderate": "🟡",
+                   "notable": "🟡", "low": "🟢", "info": "🔵"}
+    opsec = bi.get("operational_security", {})
+    if opsec.get("level"):
+        st.markdown(
+            f"**Operational security posture:** "
+            f"{_LEVEL_ICON.get(str(opsec.get('level')).lower(), '⚪')} "
+            f"`{opsec.get('level')}`"
+        )
+        if opsec.get("rationale"):
+            st.caption(opsec["rationale"])
+    for ind in bi.get("indicators", []):
+        icon = _LEVEL_ICON.get(str(ind.get("level")).lower(), "⚪")
+        with st.container(border=True):
+            st.markdown(f"{icon} **{ind.get('indicator', '')}**  ·  _{ind.get('level', '')}_")
+            if ind.get("rationale"):
+                st.caption(ind["rationale"])
+            if ind.get("evidence"):
+                st.caption("Evidence: " + ", ".join(str(e) for e in ind["evidence"][:6]))
+    if bi.get("note"):
+        st.caption(bi["note"])
     st.divider()
 
 # ---------------------------------------------------------------------------

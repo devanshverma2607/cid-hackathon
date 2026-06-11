@@ -14,6 +14,10 @@ node_modules/
 worker_go/tools/go/*
 !worker_go/tools/go/.gitkeep
 
+# Neo4j GDS plugin JAR (provisioned by scripts/setup_neo4j_gds.sh; keep placeholder)
+neo4j/plugins/*.jar
+!neo4j/plugins/.gitkeep
+
 # Logs
 *.log
 

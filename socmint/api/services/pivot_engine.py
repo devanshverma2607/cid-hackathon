@@ -32,6 +32,28 @@ MAX_SEEDS_PER_HOP = int(os.environ.get("PIVOT_MAX_SEEDS_PER_HOP", "10"))
 MAX_TOTAL_SEEDS = int(os.environ.get("PIVOT_MAX_TOTAL_SEEDS", "40"))
 DEFAULT_PHONE_REGION = os.environ.get("DEFAULT_PHONE_REGION", "IN").upper()
 
+# ---- dynamic bounds --------------------------------------------------------
+# Absolute safety ceilings: dynamic scaling can raise the effective caps toward
+# these but NEVER beyond them, so a case can never explode regardless of
+# category. All env-overridable.
+PIVOT_DEPTH_CEILING = int(os.environ.get("PIVOT_DEPTH_CEILING", "4"))
+PIVOT_TOTAL_CEILING = int(os.environ.get("PIVOT_TOTAL_CEILING", "120"))
+PIVOT_PER_HOP_CEILING = int(os.environ.get("PIVOT_PER_HOP_CEILING", "25"))
+
+# Per-category scaling: higher-stakes investigations justify deeper / broader
+# expansion; light-touch research stays conservative.
+#   category -> (depth_bonus, total_multiplier, per_hop_multiplier)
+PIVOT_CATEGORY_FACTORS = {
+    "cybercrime": (1, 1.6, 1.5),
+    "fraud":      (1, 1.4, 1.3),
+    "harassment": (0, 1.2, 1.2),
+    "research":   (0, 1.0, 1.0),
+}
+
+# Pivot value ranking: hard identifiers are claimed before soft ones so the
+# most valuable leads always fit inside the budget (lower = higher priority).
+_SEED_PRIORITY = {"email": 0, "phone": 1, "domain": 2, "username": 3}
+
 # Visited-set / counter TTL so finished cases don't accumulate in Redis forever.
 _REDIS_TTL_SECONDS = 24 * 3600
 
@@ -41,7 +63,7 @@ _DOMAIN_RE = re.compile(r"^(?:[A-Za-z0-9\-]+\.)+[A-Za-z]{2,}$")
 # platform_enrichment keys that carry pivotable identifiers.
 _EMAIL_KEYS = ("public_email", "email")
 _EMAIL_LIST_KEYS = ("discovered_emails", "emails")
-_PHONE_KEYS = ("phone", "phone_number")
+_PHONE_KEYS = ("phone", "phone_number", "public phone", "public_phone")
 _USERNAME_KEYS = ("twitter_username", "telegram_username", "username")
 _USERNAME_LIST_KEYS = ("discovered_usernames",)
 _DOMAIN_KEYS = ("blog", "website", "url", "domain")
@@ -61,6 +83,15 @@ class PivotSeed:
     def key(self) -> str:
         """Stable dedupe key across hops (type + canonical value)."""
         return f"{self.seed_type}:{self.seed_value}"
+
+
+@dataclass(frozen=True)
+class PivotBounds:
+    """Effective per-case expansion caps (dynamically scaled, then clamped)."""
+
+    max_depth: int
+    max_total: int
+    max_per_hop: int
 
 
 # ---- normalisation helpers -------------------------------------------------
@@ -173,6 +204,11 @@ class PivotEngine:
                 add("email", rval, unit, rval)
             elif rtype == "account_found" and "@" in rval and "://" not in rval:
                 add("email", rval, unit, rval)
+            elif rtype in ("whatsapp_hit", "phone_intel"):
+                # a phone number discovered from an email/username investigation
+                # (email2whatsapp candidate, phoneinfoga-validated number) — feed
+                # it back into the phone-enrichment chain.
+                add("phone", rval, unit, rval)
             elif rtype == "domain_hit":
                 add("domain", rval, unit, rval)
 
@@ -201,6 +237,24 @@ class PivotEngine:
         return pivots
 
     # ---- visited-set / bounds (Redis) --------------------------------------
+    @classmethod
+    def compute_bounds(cls, case: Optional[dict] = None) -> PivotBounds:
+        """Scale the base caps by case category, clamped to absolute ceilings.
+
+        A cybercrime/fraud case justifies deeper, broader expansion than a
+        light-touch research lookup. Unknown categories fall back to the
+        conservative baseline. The result can never exceed the safety ceilings.
+        """
+        category = str((case or {}).get("target_category", "")).lower()
+        depth_bonus, total_mult, per_hop_mult = PIVOT_CATEGORY_FACTORS.get(
+            category, (0, 1.0, 1.0)
+        )
+        return PivotBounds(
+            max_depth=min(PIVOT_DEPTH_CEILING, MAX_PIVOT_DEPTH + depth_bonus),
+            max_total=min(PIVOT_TOTAL_CEILING, round(MAX_TOTAL_SEEDS * total_mult)),
+            max_per_hop=min(PIVOT_PER_HOP_CEILING, round(MAX_SEEDS_PER_HOP * per_hop_mult)),
+        )
+
     @staticmethod
     def _redis():
         import redis  # local import keeps the engine importable without redis
@@ -223,14 +277,21 @@ class PivotEngine:
         except Exception as exc:  # noqa: BLE001
             logger.warning("pivot mark_processed failed: %s", exc)
 
-    def select_new(self, case_id: str, candidates: list[PivotSeed]) -> list[PivotSeed]:
+    def select_new(self, case_id: str, candidates: list[PivotSeed],
+                   max_total: Optional[int] = None,
+                   max_per_hop: Optional[int] = None) -> list[PivotSeed]:
         """Return only candidates never seen before, honouring all caps.
 
         Atomically claims each identifier in the Redis visited set so concurrent
-        pivot tasks can't double-process the same seed.
+        pivot tasks can't double-process the same seed. Caps default to the
+        module baselines but accept dynamic per-case overrides. Hard identifiers
+        (email/phone/domain) are claimed before soft ones so the most valuable
+        leads always fit inside the budget.
         """
         if not candidates:
             return []
+        max_total = MAX_TOTAL_SEEDS if max_total is None else max_total
+        max_per_hop = MAX_SEEDS_PER_HOP if max_per_hop is None else max_per_hop
         try:
             client = self._redis()
         except Exception as exc:  # noqa: BLE001 — without Redis, don't pivot (fail safe)
@@ -242,14 +303,16 @@ class PivotEngine:
         client.expire(seen_key, _REDIS_TTL_SECONDS)
 
         already = int(client.get(count_key) or 0)
-        budget = max(0, MAX_TOTAL_SEEDS - already)
+        budget = max(0, max_total - already)
         if budget <= 0:
             logger.info("pivot total cap reached for case %s", case_id)
             return []
 
+        # Claim the highest-value identifiers first (hard before soft).
+        ordered = sorted(candidates, key=lambda c: _SEED_PRIORITY.get(c.seed_type, 9))
         selected: list[PivotSeed] = []
-        for cand in candidates:
-            if len(selected) >= MAX_SEEDS_PER_HOP or len(selected) >= budget:
+        for cand in ordered:
+            if len(selected) >= max_per_hop or len(selected) >= budget:
                 break
             # SADD returns 1 only when the member is new → atomic claim.
             if client.sadd(seen_key, cand.key) == 1:

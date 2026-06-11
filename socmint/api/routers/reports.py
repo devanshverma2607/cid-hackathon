@@ -22,8 +22,9 @@ def generate_report(case_id: UUID, session: Session = Depends(get_db)) -> dict:
     json_package = generator.generate_json_package(case_id, session)
     json_bytes = json.dumps(json_package, default=str, indent=2).encode("utf-8")
     pdf_bytes = generator.generate_pdf_report(case_id, json_package)
+    html_bytes = generator.generate_html_report(case_id, json_package)
     bundle_hash = generator.sign_bundle(json_bytes, pdf_bytes)
-    outputs = generator.save_outputs(case_id, json_bytes, pdf_bytes, bundle_hash)
+    outputs = generator.save_outputs(case_id, json_bytes, pdf_bytes, bundle_hash, html_bytes)
     return {"case_id": str(case_id), "bundle_sha256": bundle_hash, "outputs": outputs}
 
 
@@ -46,6 +47,12 @@ def download_json(case_id: UUID) -> Response:
 def download_pdf(case_id: UUID) -> Response:
     """Download the PDF report."""
     return _download(case_id, "report.pdf", "application/pdf")
+
+
+@router.get("/download/{case_id}/html")
+def download_html(case_id: UUID) -> Response:
+    """Download the interactive HTML report."""
+    return _download(case_id, "report.html", "text/html; charset=utf-8")
 
 
 @router.get("/download/{case_id}/sha256")

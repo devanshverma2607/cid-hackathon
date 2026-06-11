@@ -17,8 +17,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install CPU-only torch first so sentence-transformers reuses it instead of
-# pulling the multi-gigabyte CUDA/GPU wheel stack.
-RUN pip install --no-cache-dir torch==2.4.1 --index-url https://download.pytorch.org/whl/cpu
+# pulling the multi-gigabyte CUDA/GPU wheel stack. torchvision (matching CPU
+# build) is required by facenet-pytorch's MTCNN face detector.
+RUN pip install --no-cache-dir torch==2.4.1 torchvision==0.19.1 --index-url https://download.pytorch.org/whl/cpu
 
 COPY worker_python/requirements.txt /app/worker_python/requirements.txt
 RUN pip install --no-cache-dir -r /app/worker_python/requirements.txt
@@ -93,6 +94,17 @@ RUN set -e; mkdir -p "$PY_TOOLS_DIR"; \
 # tool layers above.
 # ---------------------------------------------------------------------------
 RUN pip install --no-cache-dir telethon==1.36.0
+
+# ---------------------------------------------------------------------------
+# facenet-pytorch — face detection (MTCNN) + recognition (InceptionResnetV1)
+# for the face-match identity signal (same PERSON across different photos).
+# Installed with --no-deps because its pinned Pillow<10.3 conflicts with our
+# Pillow 10.4; its real runtime deps (torch, numpy, Pillow, requests) are all
+# already present. Late layer so it never invalidates the cached tool layers.
+# A failed install degrades to "face matching disabled" at runtime (graceful).
+# ---------------------------------------------------------------------------
+RUN pip install --no-cache-dir --no-deps facenet-pytorch==2.6.0 \
+    || echo "WARN: facenet-pytorch install failed (face matching will be disabled)"
 
 # ---------------------------------------------------------------------------
 # Tier-1 tool additions: phone intelligence + structured-ID extraction.

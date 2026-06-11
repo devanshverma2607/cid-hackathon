@@ -214,37 +214,91 @@ class FallbackChainManager:
         return self._deduplicate(merged) + markers
 
     # ---- trigger matrices ---------------------------------------------------
+    def _run_trigger_adapter(
+        self, adapter_cls, seed: str, case_id: UUID, run_id: UUID, chain: str,
+    ) -> tuple[list[EvidenceUnit], Optional[EvidenceUnit]]:
+        """Run one Tier-4 trigger adapter; return (positives, status_marker).
+
+        Mirrors :meth:`execute_chain`: a tool that runs but yields no positive
+        hit still contributes a single ``unavailable``/``blocked`` marker so the
+        pipeline status view can tell a tool that *ran and found nothing*
+        (skipped) apart from one that *never ran* (pending). Without this, every
+        Tier-4 tool that came up empty stayed "pending" forever and looked unused.
+        """
+        adapter = adapter_cls()
+        try:
+            units = adapter.execute(seed, case_id, run_id, self.analyst_id, "username")
+        except Exception as exc:  # noqa: BLE001 — a trigger tool must never abort enrichment
+            units = []
+            logger.warning("trigger adapter %s raised: %s", adapter_cls.__name__, exc)
+
+        positives = [u for u in units if self._is_positive(u)]
+        if positives:
+            return positives, None
+
+        marker = next(
+            (u for u in units if u.result_type in ("unavailable", "blocked")), None
+        )
+        if marker is None:
+            marker = adapter._make_unavailable_unit(seed, "no results")
+        marker.case_id = case_id
+        marker.run_id = run_id
+        marker.analyst_id = self.analyst_id
+        self._audit(
+            "TOOL_SKIPPED",
+            {"tool": adapter.name(), "chain": chain, "reason": "no positive results"},
+        )
+        return [], marker
+
     def trigger_platform_tools(
         self, platform: str, account_url: str, case_id: Optional[UUID] = None,
         run_id: Optional[UUID] = None,
     ) -> list[EvidenceUnit]:
-        """Fire the Tier 4 adapters mapped to a confirmed platform."""
+        """Fire the Tier 4 adapters mapped to a confirmed platform.
+
+        Returns positive hits *plus* one status marker per adapter that ran
+        empty, so :func:`preserve_and_persist` records every Tier-4 tool that
+        executed (the markers are written to the DB but excluded from
+        correlation/insights, which only consume positive result types).
+        """
         case_id = case_id or self.case_id
         run_id = run_id or self.run_id
         adapters = self.platform_map.get(platform.lower(), [])
-        results: list[EvidenceUnit] = []
+        seed = self._seed_from_url(account_url) or account_url
+        positives: list[EvidenceUnit] = []
+        markers: list[EvidenceUnit] = []
         for adapter_cls in adapters:
-            adapter = adapter_cls()
-            seed = self._seed_from_url(account_url) or account_url
-            units = adapter.execute(seed, case_id, run_id, self.analyst_id, "username")
-            results.extend(u for u in units if self._is_positive(u))
-        return self._deduplicate(results)
+            pos, marker = self._run_trigger_adapter(
+                adapter_cls, seed, case_id, run_id, f"platform:{platform.lower()}"
+            )
+            positives.extend(pos)
+            if marker is not None:
+                markers.append(marker)
+        return self._deduplicate(positives) + markers
 
     def trigger_domain_tools(
         self, domain: str, case_id: Optional[UUID] = None, run_id: Optional[UUID] = None
     ) -> list[EvidenceUnit]:
-        """Fire TheHarvester, FinalRecon, Webdiver in sequence for a domain."""
+        """Fire the domain Tier 4 matrix (theHarvester/finalrecon/webdiver/...).
+
+        Like :meth:`trigger_platform_tools`, returns positives plus a status
+        marker per empty tool so every domain tool's execution is recorded.
+        """
         case_id = case_id or self.case_id
         run_id = run_id or self.run_id
-        results: list[EvidenceUnit] = []
+        positives: list[EvidenceUnit] = []
+        markers: list[EvidenceUnit] = []
         for adapter_cls in (
             TheHarvesterAdapter, FinalReconAdapter, WebdiverAdapter,
             Sublist3rAdapter, DnstwistAdapter,
         ):
-            adapter = adapter_cls()
-            units = adapter.execute(domain, case_id, run_id, self.analyst_id, "username")
-            results.extend(u for u in units if self._is_positive(u))
-        return self._deduplicate(results)
+            pos, marker = self._run_trigger_adapter(
+                adapter_cls, domain, case_id, run_id, "domain"
+            )
+            positives.extend(pos)
+            if marker is not None:
+                markers.append(marker)
+        return self._deduplicate(positives) + markers
 
     @staticmethod
     def _seed_from_url(url: str) -> str:

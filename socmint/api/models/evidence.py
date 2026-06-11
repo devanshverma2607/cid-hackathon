@@ -63,6 +63,8 @@ class EvidenceUnit(BaseModel):
     confidence_raw: Optional[float] = None
     signal_weights: Optional[dict] = None
     bio_embedding: Optional[list[float]] = None
+    image_embedding: Optional[list[float]] = None
+    face_embedding: Optional[list[float]] = None
 
     timestamp_collected: datetime = Field(default_factory=_utcnow)
     timestamp_preserved: Optional[datetime] = None

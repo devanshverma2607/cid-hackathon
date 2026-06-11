@@ -63,3 +63,24 @@ def get_dossier(case_id: UUID, session: Session = Depends(get_db)) -> dict:
             "completeness": profile["profile_completeness"]["score"],
         },
     }
+
+
+@router.get("/{case_id}/ai-summary")
+def get_ai_summary(case_id: UUID, session: Session = Depends(get_db)) -> dict:
+    """Generate the optional grounded local-LLM dossier summary for a case.
+
+    Dedicated endpoint so the main dossier renders instantly; this one can take
+    longer (model load + inference) or return null when the LLM is unavailable.
+    Skips the (heavy) persona resolve — the summary is derived from evidence.
+    """
+    evidence = _rows(session, "SELECT * FROM evidence_units WHERE case_id = :cid", case_id)
+    links = _rows(
+        session,
+        "SELECT * FROM identity_links WHERE case_id = :cid ORDER BY confidence_score DESC",
+        case_id,
+    )
+    case_rows = _rows(session, "SELECT * FROM cases WHERE case_id = :cid", case_id)
+    case = case_rows[0] if case_rows else {"case_id": str(case_id)}
+
+    profile = ProfileEngine().build(evidence, links, case, include_ai=True)
+    return {"case_id": str(case_id), "ai_summary": profile.get("ai_summary")}

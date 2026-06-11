@@ -215,6 +215,41 @@ def _mojeek_search(query: str, max_results: int, use_tor: bool) -> list[dict]:
     return results
 
 
+_SEED_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_SEED_PHONE_RE = re.compile(r"^\+?[0-9][0-9\s\-().]{6,}$")
+
+
+def classify_seed(seed: str) -> str:
+    """Best-effort seed-type guess for dork selection: ``email`` | ``phone`` | ``username``."""
+    s = (seed or "").strip()
+    if _SEED_EMAIL_RE.match(s):
+        return "email"
+    if _SEED_PHONE_RE.match(s):
+        return "phone"
+    return "username"
+
+
+def select_dorks(
+    seed: str,
+    base: tuple[str, ...],
+    by_type: dict[str, tuple[str, ...]],
+    max_dorks: int = 6,
+) -> tuple[str, ...]:
+    """Pick a seed-type-aware dork set: generic ``base`` + type-specific extras.
+
+    De-duplicates while preserving order and caps the total at ``max_dorks`` to
+    keep Tor-routed search traffic bounded.
+    """
+    extra = by_type.get(classify_seed(seed), ())
+    seen: set[str] = set()
+    dorks: list[str] = []
+    for template in (*base, *extra):
+        if template not in seen:
+            seen.add(template)
+            dorks.append(template)
+    return tuple(dorks[:max_dorks])
+
+
 def ddg_search(query: str, max_results: int = 20, use_tor: bool = True) -> list[dict]:
     """Keyless web search → ``[{'url','title','snippet'}]``.
 

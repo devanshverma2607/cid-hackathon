@@ -39,7 +39,19 @@ def _load_case_units(case_id: str):
     return units
 
 
-# Map a pivot seed_type to the chain tasks that should sweep it.
+def _load_case(case_id: str) -> dict:
+    """Load the case row (target_category drives dynamic pivot bounds)."""
+    from api.db.postgres import session_scope
+    try:
+        with session_scope() as session:
+            row = session.execute(
+                text("SELECT target_category, seed_type FROM cases WHERE case_id = :cid"),
+                {"cid": case_id},
+            ).mappings().first()
+            return dict(row) if row else {}
+    except Exception as exc:  # noqa: BLE001 — missing case → conservative baseline
+        logger.debug("pivot case load failed: %s", exc)
+        return {}
 def _sweep_signatures(seed: "object", case_id: str, run_id: str, analyst_id: str) -> list:
     from worker_python.tasks.tier1_tasks import (
         run_tier1_username_sweep, run_tier1_email_sweep, run_tier1_phone_sweep,
@@ -79,10 +91,11 @@ def run_pivot_expansion(
     """
     from celery import chord, group
 
-    from api.services.pivot_engine import PivotEngine, PIVOT_ENABLED, MAX_PIVOT_DEPTH
+    from api.services.pivot_engine import PivotEngine, PIVOT_ENABLED
     from api.services.graph_builder import GraphBuilder
 
-    if not PIVOT_ENABLED or depth >= MAX_PIVOT_DEPTH:
+    bounds = PivotEngine.compute_bounds(_load_case(case_id))
+    if not PIVOT_ENABLED or depth >= bounds.max_depth:
         return {"depth": depth, "expanded": 0, "reason": "disabled_or_max_depth"}
 
     pivot = PivotEngine()
@@ -94,7 +107,7 @@ def run_pivot_expansion(
     )
 
     candidates = pivot.extract_pivots(units)
-    new_seeds = pivot.select_new(case_id, candidates)
+    new_seeds = pivot.select_new(case_id, candidates, bounds.max_total, bounds.max_per_hop)
     if not new_seeds:
         return {"depth": depth, "expanded": 0, "reason": "no_new_identifiers"}
 
@@ -117,7 +130,6 @@ def run_pivot_expansion(
         "pivot hop %s: re-seeding %s new identifiers (%s sweep tasks)",
         depth + 1, len(new_seeds), len(header),
     )
-
     if not header:
         return {"depth": depth, "expanded": 0, "reason": "no_sweeps"}
 

@@ -7,6 +7,9 @@ evidence decay, the 2-signal corroboration rule, and confidence thresholds.
 from __future__ import annotations
 
 import logging
+import math
+import re
+from collections import Counter
 from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
@@ -33,6 +36,8 @@ W_WHATSAPP = 7
 W_LEVENSHTEIN = 5
 W_DORK = 5
 W_ENRICHMENT = 5
+W_STYLOMETRY = 8   # author writing-style fingerprint (complements bio semantics)
+W_TEMPORAL = 6     # account-creation proximity (same owner, same era)
 
 # ---- Section 9.3 — conflict penalties --------------------------------------
 P_BOT = -15
@@ -49,6 +54,7 @@ DECAY = {
     "username": (365.0, 0.50),
     "photo": (180.0, 0.60),
     "bio": (90.0, 0.70),
+    "stylometry": (90.0, 0.70),
     "dork": (30.0, 0.50),
 }
 
@@ -58,9 +64,17 @@ THRESHOLD_MEDIUM = 50
 THRESHOLD_LOW = 25
 
 PHASH_MAX_DISTANCE = 8
+IMAGE_SIM_THRESHOLD = 0.92   # CLIP cosine: same avatar re-encoded/resized/cropped
+FACE_SIM_THRESHOLD = 0.62    # FaceNet cosine: same person, different photo
 BIO_SIM_THRESHOLD = 0.80
 LEVENSHTEIN_MAX = 2
 MIN_SIGNALS = 2
+
+# ---- engine identity + new-signal tuning -----------------------------------
+ENGINE_VERSION = "correlation-2.2"
+STYLOMETRY_THRESHOLD = 0.68   # conservative: short social bios are noisy
+STYLOMETRY_MIN_LEN = 24       # need enough text to fingerprint a style
+CREATION_PROXIMITY_DAYS = 45  # accounts created within ~6 weeks corroborate
 
 
 def _decay_factor(age_days: int, signal: str) -> float:
@@ -83,6 +97,21 @@ def _handle_from_value(value: str) -> str:
     return leet_normalise(candidate.lstrip("@"))
 
 
+def _parse_vector(value) -> Optional[list[float]]:
+    """Parse a pgvector column value (str '[..]' / list / None) into floats."""
+    if value is None:
+        return None
+    if isinstance(value, (list, tuple)):
+        return [float(x) for x in value] or None
+    text_val = str(value).strip().strip("[]")
+    if not text_val:
+        return None
+    try:
+        return [float(x) for x in text_val.split(",") if x.strip()] or None
+    except ValueError:
+        return None
+
+
 class CorrelationEngine:
     """Compute pairwise confidence and persist identity links."""
 
@@ -100,6 +129,8 @@ class CorrelationEngine:
             "has_dork": False,
             "bio": None,
             "bio_embedding": None,
+            "image_embedding": None,
+            "face_embedding": None,
             "photo_hash": None,
             "location": None,
             "join_date": None,
@@ -134,6 +165,10 @@ class CorrelationEngine:
                 profile["has_dork"] = True
             if unit.bio_embedding:
                 profile["bio_embedding"] = unit.bio_embedding
+            if unit.image_embedding and not profile["image_embedding"]:
+                profile["image_embedding"] = unit.image_embedding
+            if unit.face_embedding and not profile["face_embedding"]:
+                profile["face_embedding"] = unit.face_embedding
 
             enrichment = unit.platform_enrichment or {}
             if isinstance(enrichment, dict):
@@ -187,18 +222,29 @@ class CorrelationEngine:
         if a["breach_sources"] & b["breach_sources"]:
             add_signal("breach_reuse", W_BREACH_REUSE, _decay_factor(age, "breach"))
 
-        # Identical profile photo (pHash <= 8) — decay applied.
-        if self._photo_match(a["photo_hash"], b["photo_hash"]):
+        # Identical profile photo — pHash (<=8) OR CLIP reverse-image embedding
+        # (the same avatar re-encoded/resized/cropped). Decay applied; one signal.
+        if self._photo_match(a["photo_hash"], b["photo_hash"]) or self._image_embedding_match(
+            a.get("image_embedding"), b.get("image_embedding")
+        ) or self._face_match(a.get("face_embedding"), b.get("face_embedding")):
             add_signal("photo_match", W_PHOTO_MATCH, _decay_factor(age, "photo"))
 
         # Ghunt Google account confirmed — bonus, no decay.
         if a["has_google"] and b["has_google"]:
             add_signal("google_confirmed", W_GOOGLE)
 
-        # Bio similarity >= 80% — decay applied.
+        # Bio similarity >= 80% (semantic) — decay applied. When the bios are
+        # not semantically close (or no embedding is available), fall back to a
+        # stylometric fingerprint that catches the *same author writing
+        # different text* (char n-gram + word-usage cosine), so the two signals
+        # never double-count the same piece of text.
         sim = self._bio_similarity(a, b)
         if sim is not None and sim >= BIO_SIM_THRESHOLD:
             add_signal("bio_similarity", W_BIO_SIM, _decay_factor(age, "bio"))
+        else:
+            sty = self._stylometry_similarity(a.get("bio"), b.get("bio"))
+            if sty is not None and sty >= STYLOMETRY_THRESHOLD:
+                add_signal("stylometry_match", W_STYLOMETRY, _decay_factor(age, "stylometry"))
 
         # Overlapping linked external URLs — durable, no decay.
         if a["urls"] & b["urls"]:
@@ -219,6 +265,11 @@ class CorrelationEngine:
         # Platform enrichment metadata match (bio/location/join date overlap).
         if self._enrichment_match(a, b):
             add_signal("enrichment_match", W_ENRICHMENT)
+
+        # Account-creation proximity — two profiles created within a short
+        # window corroborate common ownership (durable, no decay).
+        if self._creation_proximity(a.get("join_date"), b.get("join_date")):
+            add_signal("creation_proximity", W_TEMPORAL)
 
         # ---- conflict penalties --------------------------------------------
         penalties: dict[str, int] = {}
@@ -243,6 +294,16 @@ class CorrelationEngine:
 
         signal_count = len(breakdown)
         tier = self._tier(score, signal_count)
+        probability = self._calibrate(score)
+
+        # Reproducibility + calibrated confidence travel with the link in a
+        # reserved key (never counted as a signal; consumers ignore '_'-keys).
+        breakdown["_meta"] = {
+            "engine_version": ENGINE_VERSION,
+            "probability": probability,
+            "score": round(score, 2),
+            "signal_count": signal_count,
+        }
 
         return {
             "confidence_score": round(score, 2),
@@ -250,6 +311,8 @@ class CorrelationEngine:
             "signal_breakdown": breakdown,
             "penalties": penalties,
             "signal_count": signal_count,
+            "probability": probability,
+            "engine_version": ENGINE_VERSION,
         }
 
     @staticmethod
@@ -302,6 +365,24 @@ class CorrelationEngine:
             return hash_a == hash_b
 
     @staticmethod
+    def _image_embedding_match(
+        emb_a: Optional[list[float]], emb_b: Optional[list[float]]
+    ) -> bool:
+        """True when two CLIP avatar embeddings are the same image (cosine high)."""
+        if not emb_a or not emb_b or len(emb_a) != len(emb_b):
+            return False
+        return CorrelationEngine._cosine(emb_a, emb_b) >= IMAGE_SIM_THRESHOLD
+
+    @staticmethod
+    def _face_match(
+        emb_a: Optional[list[float]], emb_b: Optional[list[float]]
+    ) -> bool:
+        """True when two FaceNet embeddings are the same person (cosine high)."""
+        if not emb_a or not emb_b or len(emb_a) != len(emb_b):
+            return False
+        return CorrelationEngine._cosine(emb_a, emb_b) >= FACE_SIM_THRESHOLD
+
+    @staticmethod
     def _bio_similarity(a: dict, b: dict) -> Optional[float]:
         emb_a, emb_b = a.get("bio_embedding"), b.get("bio_embedding")
         if emb_a and emb_b:
@@ -319,12 +400,80 @@ class CorrelationEngine:
 
     @staticmethod
     def _cosine(v1: list[float], v2: list[float]) -> float:
-        import math
-
         dot = sum(x * y for x, y in zip(v1, v2))
         n1 = math.sqrt(sum(x * x for x in v1))
         n2 = math.sqrt(sum(y * y for y in v2))
         return dot / (n1 * n2) if n1 and n2 else 0.0
+
+    @staticmethod
+    def _stylometry_similarity(bio_a: Optional[str], bio_b: Optional[str]) -> Optional[float]:
+        """Author writing-style similarity via char n-gram + word-usage cosine.
+
+        Dependency-free. Captures *style* (n-gram/word habits) rather than
+        meaning, so it complements semantic bio similarity by catching the same
+        author writing two different bios. Returns ``None`` when either bio is
+        missing or too short to fingerprint reliably.
+        """
+        if not bio_a or not bio_b:
+            return None
+        a, b = bio_a.strip(), bio_b.strip()
+        if len(a) < STYLOMETRY_MIN_LEN or len(b) < STYLOMETRY_MIN_LEN:
+            return None
+
+        def features(text: str) -> Counter:
+            t = " ".join(text.lower().split())
+            grams: Counter = Counter(t[i:i + 3] for i in range(len(t) - 2))
+            grams.update("w:" + w for w in re.findall(r"[a-z']+", t))
+            return grams
+
+        fa, fb = features(a), features(b)
+        common = set(fa) & set(fb)
+        if not common:
+            return 0.0
+        dot = sum(fa[k] * fb[k] for k in common)
+        na = math.sqrt(sum(v * v for v in fa.values()))
+        nb = math.sqrt(sum(v * v for v in fb.values()))
+        return dot / (na * nb) if na and nb else 0.0
+
+    @staticmethod
+    def _parse_date(value) -> Optional[datetime]:
+        """Best-effort parse of a creation/join date in common formats."""
+        if value in (None, ""):
+            return None
+        if isinstance(value, datetime):
+            return value
+        s = str(value).strip()
+        try:
+            return datetime.fromisoformat(s.replace("Z", "+00:00"))
+        except Exception:
+            pass
+        for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%d-%m-%Y", "%m/%d/%Y",
+                    "%b %d, %Y", "%B %d, %Y", "%b %Y", "%B %Y", "%Y"):
+            try:
+                return datetime.strptime(s, fmt)
+            except Exception:
+                continue
+        return None
+
+    @classmethod
+    def _creation_proximity(cls, date_a, date_b) -> bool:
+        da, db = cls._parse_date(date_a), cls._parse_date(date_b)
+        if not da or not db:
+            return False
+        if da.tzinfo and not db.tzinfo:
+            db = db.replace(tzinfo=da.tzinfo)
+        elif db.tzinfo and not da.tzinfo:
+            da = da.replace(tzinfo=db.tzinfo)
+        return abs((da - db).days) <= CREATION_PROXIMITY_DAYS
+
+    @staticmethod
+    def _calibrate(score: float) -> float:
+        """Map a raw additive score to a calibrated [0,1] probability.
+
+        Logistic centred on the MEDIUM threshold so score=50→0.5, 75→~0.88,
+        25→~0.12 — a monotonic, explainable confidence companion to the tier.
+        """
+        return round(1.0 / (1.0 + math.exp(-0.08 * (score - 50.0))), 4)
 
     @staticmethod
     def _enrichment_match(a: dict, b: dict) -> bool:
@@ -410,6 +559,13 @@ class CorrelationEngine:
                     except Exception as exc:  # noqa: BLE001
                         logger.warning("neo4j link write failed: %s", exc)
 
+        # Partition the freshly-written SAME_AS graph into communities (GDS
+        # Louvain when available, label-propagation fallback) — best-effort.
+        try:
+            graph.detect_communities(case_id, write_back=True)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("community detection failed: %s", exc)
+
         return links
 
     @staticmethod
@@ -466,6 +622,8 @@ class CorrelationEngine:
             result_value=row["result_value"],
             confidence_raw=row.get("confidence_raw"),
             signal_weights=row.get("signal_weights"),
+            image_embedding=_parse_vector(row.get("image_embedding")),
+            face_embedding=_parse_vector(row.get("face_embedding")),
             timestamp_collected=row["timestamp_collected"],
             timestamp_preserved=row.get("timestamp_preserved"),
             snapshot_ref=row.get("snapshot_ref"),
