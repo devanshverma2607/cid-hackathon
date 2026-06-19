@@ -22,10 +22,19 @@ COOLDOWNS = {
     "social_analyzer": 8,
     "dorks_eye": 30,
     "dorksint": 30,
+    "forum_sweep": 30,
     "toutatis": 20,
     "telegramsint": 10,
     "geogramint": 10,
     "tiktok_userdata": 15,
+    "xposedornot": 1,
+    "hudsonrock": 2,
+    "proxynova": 2,
+    "intelx": 2,
+    "abstractapi_phone": 1,
+    "virustotal": 15,
+    "shodan": 2,
+    "hunterio": 2,
 }
 
 

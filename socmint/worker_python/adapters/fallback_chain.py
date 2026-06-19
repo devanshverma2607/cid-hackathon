@@ -28,17 +28,24 @@ from worker_python.adapters.email.h8mail import H8mailAdapter
 from worker_python.adapters.email.mailcat import MailcatAdapter
 from worker_python.adapters.email.eyes import EyesAdapter
 from worker_python.adapters.email.ghunt import GhuntAdapter
+from worker_python.adapters.email.xposedornot import XposedOrNotAdapter
+from worker_python.adapters.email.hudsonrock import HudsonRockAdapter
+from worker_python.adapters.email.proxynova import ProxyNovaAdapter
+from worker_python.adapters.email.intelx import IntelXAdapter
+from worker_python.adapters.email.hunterio import HunterIOAdapter
 
 # Phone adapters
 from worker_python.adapters.phone.phone_enrich import PhoneEnrichAdapter
 from worker_python.adapters.phone.ignorant import IgnorantAdapter
 from worker_python.adapters.phone.phoneinfoga import PhoneInfogaAdapter
+from worker_python.adapters.phone.abstract_phone import AbstractPhoneAdapter
 
 # Passive recon adapters
 from worker_python.adapters.passive.dorks_eye import DorksEyeAdapter
 from worker_python.adapters.passive.dorksint import DorksintAdapter
 from worker_python.adapters.passive.wayback_urls import WayBackURLsAdapter
 from worker_python.adapters.passive.hunt_pastebin import HuntPastebinAdapter
+from worker_python.adapters.passive.forum_sweep import ForumSweepAdapter
 
 # Platform (Tier 4) adapters
 from worker_python.adapters.platform.toutatis import ToutatisAdapter
@@ -56,6 +63,8 @@ from worker_python.adapters.platform.finalrecon import FinalReconAdapter
 from worker_python.adapters.platform.webdiver import WebdiverAdapter
 from worker_python.adapters.platform.sublist3r import Sublist3rAdapter
 from worker_python.adapters.platform.dnstwist import DnstwistAdapter
+from worker_python.adapters.platform.virustotal import VirusTotalAdapter
+from worker_python.adapters.platform.shodan_intel import ShodanIntelAdapter
 
 # Go-binary adapters
 from worker_go.adapters.enola import EnolaAdapter
@@ -82,15 +91,22 @@ class FallbackChainManager:
         "username_tier2": [
             SherlockAdapter, MaigretAdapter, NexfilAdapter,
             SocialAnalyzerAdapter, TracerAdapter, EnolaAdapter, DetectDeeAdapter,
+            HudsonRockAdapter, ProxyNovaAdapter, IntelXAdapter,
         ],
         "email_tier1": [ZehefAdapter, SocialScanAdapter, HashtrayAdapter],
         "email_tier2": [
             HoleheAdapter, H8mailAdapter, MailcatAdapter, EyesAdapter,
             MailsleuthAdapter, GhuntAdapter, Email2WhatsAppAdapter,
+            XposedOrNotAdapter, HudsonRockAdapter, ProxyNovaAdapter, IntelXAdapter,
+            HunterIOAdapter,
         ],
-        "phone_tier1": [PhoneEnrichAdapter, IgnorantAdapter, PhoneInfogaAdapter],
+        "phone_tier1": [
+            PhoneEnrichAdapter, IgnorantAdapter, PhoneInfogaAdapter,
+            AbstractPhoneAdapter,
+        ],
         "passive_recon": [
             DorksEyeAdapter, DorksintAdapter, WayBackURLsAdapter, HuntPastebinAdapter,
+            ForumSweepAdapter,
         ],
     }
 
@@ -108,7 +124,8 @@ class FallbackChainManager:
         "github": [GitHubApiAdapter],
         "domain": [
             TheHarvesterAdapter, FinalReconAdapter, WebdiverAdapter,
-            Sublist3rAdapter, DnstwistAdapter,
+            Sublist3rAdapter, DnstwistAdapter, VirusTotalAdapter, ShodanIntelAdapter,
+            HunterIOAdapter,
         ],
     }
 
@@ -290,7 +307,8 @@ class FallbackChainManager:
         markers: list[EvidenceUnit] = []
         for adapter_cls in (
             TheHarvesterAdapter, FinalReconAdapter, WebdiverAdapter,
-            Sublist3rAdapter, DnstwistAdapter,
+            Sublist3rAdapter, DnstwistAdapter, VirusTotalAdapter, ShodanIntelAdapter,
+            HunterIOAdapter,
         ):
             pos, marker = self._run_trigger_adapter(
                 adapter_cls, domain, case_id, run_id, "domain"

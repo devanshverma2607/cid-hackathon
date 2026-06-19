@@ -382,8 +382,8 @@ TIER_TOOLS = {
     1: ["blackbird", "whatsmyname", "zehef", "socialscan", "hashtray", "ignorant"],
     2: ["sherlock", "maigret", "nexfil", "social_analyzer", "tracer", "enola",
         "detectdee", "holehe", "h8mail", "mailcat", "eyes", "mailsleuth",
-        "ghunt", "email2whatsapp"],
-    3: ["dorks_eye", "dorksint", "waybackurls", "huntpastebin"],
+        "ghunt", "email2whatsapp", "xposedornot", "hudsonrock", "proxynova"],
+    3: ["dorks_eye", "dorksint", "waybackurls", "huntpastebin", "forum_sweep"],
     4: ["toutatis", "medor", "snapintel", "telegram_intel", "tiktok_userdata",
         "mastosint", "osintssky", "osintchan", "proton_intel", "linkedin2username",
         "theharvester", "finalrecon", "webdiver", "github_api", "sublist3r", "dnstwist"],
@@ -453,11 +453,11 @@ Tool chains are defined in the `FallbackChainManager` ([worker_python/adapters/f
 | Chain | Tools (in order) |
 |---|---|
 | `username_tier1` | `blackbird`, `whatsmyname` |
-| `username_tier2` | `sherlock`, `maigret`, `nexfil`, `social_analyzer`, `tracer`, `enola`, `detectdee` |
+| `username_tier2` | `sherlock`, `maigret`, `nexfil`, `social_analyzer`, `tracer`, `enola`, `detectdee`, `hudsonrock`, `proxynova` |
 | `email_tier1` | `zehef`, `socialscan`, `hashtray` |
-| `email_tier2` | `holehe`, `h8mail`, `mailcat`, `eyes`, `mailsleuth`, `ghunt`, `email2whatsapp` |
+| `email_tier2` | `holehe`, `h8mail`, `mailcat`, `eyes`, `mailsleuth`, `ghunt`, `email2whatsapp`, `xposedornot`, `hudsonrock`, `proxynova` |
 | `phone_tier1` | `phone_enrich`, `ignorant`, `phoneinfoga` |
-| `passive_recon` (T3) | `dorks_eye`, `dorksint`, `waybackurls`, `hunt_pastebin` |
+| `passive_recon` (T3) | `dorks_eye`, `dorksint`, `waybackurls`, `hunt_pastebin`, `forum_sweep` |
 
 **Tier 4 trigger matrix** (`platform_map`, fired per confirmed platform after correlation):
 
@@ -490,6 +490,17 @@ Tool chains are defined in the `FallbackChainManager` ([worker_python/adapters/f
 | `pivot.expand` / `pivot.collect` | pivot_tasks | Recursive seed re‑dispatch loop |
 | `preservation.preserve_batch` | preservation_tasks | Background forensic preservation |
 | `go.run_adapter` | worker_go/tasks | Run a single Go‑binary adapter |
+
+**Queue isolation:** all tasks above run on the default `celery` queue consumed
+*only* by `worker_python`, except `go.*` tasks which are routed (via
+`task_routes` in **both** Celery apps) to a dedicated `go` queue that
+`worker_go` consumes exclusively (`--queues go`). This is load‑bearing, not
+cosmetic: a Celery worker that receives a message for a task it has not
+registered logs *"Received unregistered task … discarded"* and destroys the
+message. When both workers shared the default queue, Redis round‑robined
+deliveries and `worker_go` (which only knows `go.run_adapter`) silently ate
+roughly half of every scan's sweep/chord/recovery tasks — leaving most tools
+permanently "pending" and correlation unfired.
 
 ### 6.4 `aggregate_results` — the convergence callback
 
@@ -548,7 +559,8 @@ pulls any prior snapshot, and patches `snapshot_ref`/`snapshot_hash`/`wayback_re
 
 Per‑tool **cooldowns** (rate limits, seconds) are enforced from a `COOLDOWNS` map, e.g. `sherlock:5,
 maigret:5, holehe:10, h8mail:5, ghunt:15, whatsmyname:5, nexfil:5, social_analyzer:8, dorks_eye:30,
-dorksint:30, toutatis:20, telegramsint:10, geogramint:10, tiktok_userdata:15`.
+dorksint:30, forum_sweep:30, toutatis:20, telegramsint:10, geogramint:10, tiktok_userdata:15,
+xposedornot:1, hudsonrock:2, proxynova:2`.
 
 ---
 
@@ -828,8 +840,9 @@ chains:
 |---|---|
 | **Username** | blackbird, whatsmyname, sherlock, maigret, nexfil, social_analyzer, tracer, enola*, detectdee* |
 | **Email** | zehef, socialscan, hashtray, holehe, h8mail, mailcat, eyes, mailsleuth*, ghunt, email2whatsapp* |
+| **Breach / leak** | h8mail, xposedornot (keyless breach analytics), hudsonrock (keyless infostealer), proxynova (keyless combo-list, credentials masked) |
 | **Phone** | phone_enrich, ignorant, phoneinfoga |
-| **Passive / dork** | dorks_eye, dorksint, waybackurls, hunt_pastebin |
+| **Passive / dork** | dorks_eye, dorksint, waybackurls, hunt_pastebin, forum_sweep (forums/blogs/comments) |
 | **Domain** | theharvester, finalrecon, webdiver, sublist3r, dnstwist |
 | **Platform (Tier 4)** | toutatis, medor (instagram), snapintel (snapchat), telegram_intel (telegram), tiktok_userdata (tiktok), mastosint (mastodon), osintssky (bluesky), osintchan (4chan), proton_intel (protonmail), linkedin2username (linkedin), github_api + githound* (github) |
 | **Universal** | socid_extractor (profile‑URL identifier extraction), photo hasher (avatar pHash) |

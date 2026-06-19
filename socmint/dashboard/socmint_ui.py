@@ -149,7 +149,8 @@ KIND_COLORS = {
     "account": "#3498db", "source": "#e67e22", "email": "#1abc9c",
     "phone": "#e84393", "username": "#6c5ce7", "domain": "#f9ca24",
 }
-STATUS_ICONS = {"done": "🟢", "skipped": "🟡", "pending": "⚪", "running": "🔵"}
+STATUS_ICONS = {"done": "🟢", "skipped": "🟡", "pending": "⚪", "running": "🔵",
+                "waiting": "⚫"}
 
 
 def short_id(value: str, length: int = 8) -> str:

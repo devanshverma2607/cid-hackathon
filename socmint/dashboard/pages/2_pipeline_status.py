@@ -21,10 +21,14 @@ case_selector(sidebar=True)
 case_id = active_case_id()
 require_case(case_id)
 
-_STATE_BADGE = {
-    "running": ("#3498db", "🔵 SCANNING"),
-    "complete": ("#2ecc71", "🟢 COMPLETE"),
-    "idle": ("#95a5a6", "⚪ IDLE"),
+_PHASE_STYLE = {
+    "queued":    ("#5b6776", "QUEUED",    "⏳"),
+    "sweeping":  ("#3498db", "SCANNING",  "🔵"),
+    "analysing": ("#9b59b6", "ANALYSING", "🧠"),
+    "pivoting":  ("#8e44ad", "PIVOTING",  "🔀"),
+    "complete":  ("#2ecc71", "COMPLETE",  "🟢"),
+    "idle":      ("#95a5a6", "IDLE",      "⚪"),
+    "failed":    ("#e74c3c", "FAILED",    "🔴"),
 }
 
 
@@ -40,17 +44,34 @@ def fmt_duration(seconds: float) -> str:
     return f"{seconds:.1f}s"
 
 
-col_a, col_b = st.columns([1, 1])
-live = col_a.toggle("Live mode — auto-refresh while scanning", value=True)
+def tool_icon(tool: dict, active: bool) -> str:
+    """Status glyph for a tool cell — 'pending' animates only while scanning."""
+    status = tool.get("status")
+    if status == "pending":
+        return "🔵" if active else "⚪"
+    return status_icon(status)
 
-# Cadence is driven by the last observed scan state (cached in session so the
-# fragment can escalate to a full rerun to start/stop the 1s timer).
-polling = st.session_state.get("pipeline_running", True)
-interval = 1.0 if (live and polling) else None
 
-if not live:
-    if col_b.button("🔄 Refresh now", use_container_width=True):
-        st.rerun()
+# Cadence is driven by the last observed scan state (cached in session). Any
+# active phase (queued/sweeping/analysing/pivoting) reports state == "running".
+#
+# The fragment ALWAYS keeps ticking — fast (1s) while a scan is live, slow (5s)
+# when it looks idle/complete — instead of stopping dead on the first
+# non-"running" reading. This is the key robustness fix: a scan legitimately has
+# quiet gaps (a slow Tier-2 tool like enola runs ~90s producing nothing, the
+# correlation watchdog can defer the post-sweep stage, pivots spin up between
+# hops). With a hard stop, one such gap froze the whole view at a premature
+# "complete" and it never recovered. With an always-on slow heartbeat the view
+# self-heals: if work resumes, the next poll sees it and escalates back to 1s.
+FAST_POLL = 1.0
+SLOW_POLL = 5.0
+
+top = st.columns([2, 1, 1])
+live = top[0].toggle("Live mode — auto-refresh while scanning", value=True)
+active_hint = st.session_state.get("pipeline_active", True)
+interval = (FAST_POLL if active_hint else SLOW_POLL) if live else None
+if top[1].button("🔄 Refresh", use_container_width=True):
+    st.rerun()
 
 
 @st.fragment(run_every=interval)
@@ -60,25 +81,32 @@ def render_status() -> None:
         return
 
     state = status.get("state", "idle")
-    color, label = _STATE_BADGE.get(state, _STATE_BADGE["idle"])
+    phase = status.get("phase", "idle")
+    active = state == "running"
+    color, short, glyph = _PHASE_STYLE.get(phase, _PHASE_STYLE["idle"])
     elapsed = status.get("elapsed_seconds", 0)
 
     # --- live scan banner ---------------------------------------------------
     badge = (
         f"<span style='background:{color};color:#0b0b0b;padding:4px 14px;"
-        f"border-radius:14px;font-weight:700;font-size:0.95rem'>{label}</span>"
+        f"border-radius:14px;font-weight:700;font-size:0.95rem'>{glyph} {short}</span>"
     )
-    duration_word = "Elapsed" if state == "running" else "Total scan duration"
-    spinner = " ⏱️" if state == "running" else ""
-    if state == "running":
-        tail = (f" · last activity {fmt_dt(status.get('last_activity_at'))}"
-                if status.get("last_activity_at") else "")
+    spinner = " ⏱️" if active else ""
+    duration_word = "Elapsed" if active else "Total scan duration"
+    if active:
+        at = status.get("active_tool")
+        tail = f" · currently <b>{at}</b>" if at else (
+            f" · last activity {fmt_dt(status.get('last_activity_at'))}"
+            if status.get("last_activity_at") else " · awaiting first results"
+        )
     else:
-        tail = (f" · finished {fmt_dt(status.get('last_activity_at'))}"
-                if status.get("last_activity_at") else "")
+        fin = status.get("finished_at") or status.get("last_activity_at")
+        tail = f" · finished {fmt_dt(fin)}" if fin else ""
     st.markdown(
         f"{badge}&nbsp;&nbsp;<span style='font-size:1.6rem;font-weight:700'>"
         f"{fmt_duration(elapsed)}</span>{spinner}"
+        f"<br><span style='color:#9aa3ad;font-size:0.9rem'>"
+        f"{status.get('phase_label', short)}</span>"
         f"<br><span style='color:#888;font-size:0.85rem'>{duration_word}"
         f" · started {fmt_dt(status.get('started_at'))}{tail}</span>",
         unsafe_allow_html=True,
@@ -90,39 +118,77 @@ def render_status() -> None:
     pending = status.get("tools_pending", 0)
     total = status.get("tools_total", 0)
     pct = 1.0 if state == "complete" else float(status.get("progress", 0.0))
-    bar_label = f"{done} reported · {skipped} skipped · {pending} pending  (of {total} tools)"
+    bar_label = (f"{done} reported · {skipped} ran-empty · {pending} pending  "
+                 f"(of {total} expected tools)")
     st.progress(min(1.0, pct), text=bar_label)
 
     # --- headline metrics ---------------------------------------------------
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Total Hits", status.get("total_hits", 0))
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Total hits", status.get("total_hits", 0))
     m2.metric("Preserved", status.get("preservation_complete", 0))
-    m3.metric("HIGH Links", status.get("high_confidence_links", 0))
-    m4.metric("Tools reported", f"{done}/{total}")
+    m3.metric("HIGH links", status.get("high_confidence_links", 0))
+    m4.metric("Tools reported", f"{done + skipped}/{total}")
+    m5.metric("Pivot hops", status.get("pivot_hops", 0),
+              help="Recursive expansion rounds the engine ran on discovered identifiers.")
 
-    st.caption(f"refreshed {datetime.now().strftime('%H:%M:%S')}"
-               + ("  ·  polling every 1s" if state == "running" and live else ""))
+    refreshed = datetime.now().strftime("%H:%M:%S")
+    corr = "✓ correlation complete" if status.get("correlation_complete") else "correlation pending"
+    cadence = ""
+    if live:
+        cadence = "  ·  polling every 1s" if active else "  ·  watching every 5s"
+    st.caption(f"refreshed {refreshed} · {corr}{cadence}")
 
     # --- per-tier tool grid -------------------------------------------------
-    for tier in ("tier1", "tier2", "tier3", "tier4"):
+    for tier in ("tier1", "tier2", "tier3"):
         tools = status.get(tier, [])
-        if not tools:
+        # Show tools relevant to this case (applicable to its seeds, or that ran);
+        # mute the rest into a small footnote so the grid is honest, not noisy.
+        shown = [t for t in tools if t.get("applicable") or t.get("status") in ("done", "skipped")]
+        muted = [t for t in tools if t not in shown]
+        if not shown and not muted:
             continue
-        tdone = sum(1 for t in tools if t.get("status") == "done")
-        st.subheader(f"Tier {tier[-1]}  ·  {tdone}/{len(tools)} done")
+        tdone = sum(1 for t in shown if t.get("status") == "done")
+        st.subheader(f"Tier {tier[-1]}  ·  {tdone}/{len(shown)} with hits")
+        if shown:
+            cols = st.columns(4)
+            for i, tool in enumerate(shown):
+                with cols[i % 4]:
+                    st.markdown(
+                        f"{tool_icon(tool, active)} **{tool.get('tool')}**  \n"
+                        f"<span style='color:#9aa3ad;font-size:0.82rem'>"
+                        f"{tool.get('status')} · {tool.get('hits', 0)} hits</span>",
+                        unsafe_allow_html=True,
+                    )
+        if muted:
+            st.caption("Not applicable to this case's seed type: "
+                       + ", ".join(t.get("tool") for t in muted))
+
+    # --- Tier 4 triggered enrichment ----------------------------------------
+    tier4 = status.get("tier4", [])
+    fired = [t for t in tier4 if t.get("triggered") or t.get("status") in ("done", "skipped")]
+    e_fired = status.get("enrichment_triggered", 0)
+    e_done = status.get("enrichment_done", 0)
+    st.subheader(f"Tier 4 · triggered enrichment  ·  {e_fired} fired / {e_done} with hits")
+    if fired:
         cols = st.columns(4)
-        for i, tool in enumerate(tools):
+        for i, tool in enumerate(fired):
             with cols[i % 4]:
                 st.markdown(
-                    f"{status_icon(tool.get('status'))} **{tool.get('tool')}**  \n"
-                    f"{tool.get('status')} · {tool.get('hits', 0)} hits"
+                    f"{tool_icon(tool, active)} **{tool.get('tool')}**  \n"
+                    f"<span style='color:#9aa3ad;font-size:0.82rem'>"
+                    f"{tool.get('status')} · {tool.get('hits', 0)} hits</span>",
+                    unsafe_allow_html=True,
                 )
+    else:
+        st.caption("Tier 4 tools fire automatically once a profile or domain is "
+                   "confirmed — none triggered yet.")
 
-    # --- lifecycle: keep session state in sync; escalate to a full rerun on a
-    # running<->stopped transition so the 1s timer starts/stops cleanly.
-    is_running = state == "running"
-    if live and is_running != st.session_state.get("pipeline_running", None):
-        st.session_state["pipeline_running"] = is_running
+    # --- lifecycle: keep the cached active-hint in sync and escalate the poll
+    # cadence on a transition. The fragment never stops (it falls back to the
+    # slow 5s heartbeat when not active), so the view can always recover if work
+    # resumes after appearing complete — it just needs to flip the cadence.
+    if live and active != st.session_state.get("pipeline_active", None):
+        st.session_state["pipeline_active"] = active
         st.rerun()
 
 

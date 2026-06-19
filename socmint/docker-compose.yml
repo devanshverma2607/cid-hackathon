@@ -4,7 +4,7 @@ services:
   # PostgreSQL 15 + pgvector — relational store + semantic similarity
   # ----------------------------------------------------------------------
   postgres:
-    image: pgvector/pgvector:pg15
+    image: devanshhh2651/socmint-pgvector:pg15
     env_file: .env
     environment:
       POSTGRES_DB: socmint
@@ -27,7 +27,7 @@ services:
   # Neo4j 5 Community — identity graph store
   # ----------------------------------------------------------------------
   neo4j:
-    image: neo4j:5-community
+    image: devanshhh2651/socmint-neo4j:5-community
     environment:
       NEO4J_AUTH: neo4j/${NEO4J_PASSWORD}
       # Graph Data Science plugin enables Louvain community detection. The JAR is
@@ -56,7 +56,7 @@ services:
   # Redis 7 — Celery broker + result backend
   # ----------------------------------------------------------------------
   redis:
-    image: redis:7-alpine
+    image: devanshhh2651/socmint-redis:7-alpine
     env_file: .env
     ports:
       - "6379:6379"
@@ -72,7 +72,7 @@ services:
   # MinIO — object storage for preserved evidence artifacts
   # ----------------------------------------------------------------------
   minio:
-    image: minio/minio
+    image: devanshhh2651/socmint-minio:latest
     command: server /data --console-address ":9001"
     env_file: .env
     environment:
@@ -95,7 +95,7 @@ services:
   # Tor SOCKS proxy — anonymised egress for Tier 3 passive recon (port 9050)
   # ----------------------------------------------------------------------
   tor:
-    image: osminogin/tor-simple:latest
+    image: devanshhh2651/socmint-tor:latest
     restart: unless-stopped
     expose:
       - "9050"
@@ -107,6 +107,7 @@ services:
     build:
       context: .
       dockerfile: worker_python/Dockerfile
+    image: ${DOCKERHUB_USER:-devanshhh2651}/socmint-worker_python:latest
     env_file: .env
     environment:
       TOR_PROXY: socks5://tor:9050   # route Tor-tier adapters via the sidecar
@@ -154,13 +155,18 @@ services:
     build:
       context: .
       dockerfile: worker_go/Dockerfile
+    image: ${DOCKERHUB_USER:-devanshhh2651}/socmint-worker_go:latest
     env_file: .env
     # Publish the image-baked Go binaries into the shared go_tools volume on
     # startup so worker_python (which runs the Go adapters inline in its tier2
     # chains) can health-check and execute them too.
+    # ``--queues go`` is REQUIRED: this worker only registers ``go.run_adapter``
+    # and a Celery worker DISCARDS any message whose task it doesn't know. If it
+    # consumed the shared default queue it would destroy ~half of every scan's
+    # pipeline tasks (the "most tools stuck pending" failure mode).
     command: >
       sh -c "mkdir -p /opt/go_tools && cp -f /app/tools/go/* /opt/go_tools/ 2>/dev/null || true;
-      exec celery -A worker_go.celery_app worker --loglevel=info --concurrency=2"
+      exec celery -A worker_go.celery_app worker --loglevel=info --concurrency=2 --queues go"
     depends_on:
       postgres:
         condition: service_healthy
@@ -179,12 +185,39 @@ services:
     restart: unless-stopped
 
   # ----------------------------------------------------------------------
+  # Celery beat — durable scan-recovery scheduler
+  # ----------------------------------------------------------------------
+  # Emits the periodic ``pipeline.recover_stuck_correlations`` task from a
+  # persisted schedule. This is the crash-proof backstop for the in-memory
+  # countdown correlation watchdog: if a worker restart loses both a chord
+  # callback AND its countdown watchdog, beat still re-runs correlation for the
+  # stuck run on its next tick. Lightweight (single beat loop, no task pool).
+  worker_beat:
+    build:
+      context: .
+      dockerfile: worker_python/Dockerfile
+    image: ${DOCKERHUB_USER:-devanshhh2651}/socmint-worker_python:latest
+    env_file: .env
+    command: celery -A worker_python.celery_app beat --loglevel=info --schedule /tmp/celerybeat-schedule
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./worker_python:/app/worker_python
+      - ./api:/app/api
+      - ./worker_go:/app/worker_go
+    restart: unless-stopped
+
+  # ----------------------------------------------------------------------
   # FastAPI gateway
   # ----------------------------------------------------------------------
   api:
     build:
       context: .
       dockerfile: api/Dockerfile
+    image: ${DOCKERHUB_USER:-devanshhh2651}/socmint-api:latest
     env_file: .env
     environment:
       OLLAMA_BASE_URL: http://ollama:11434
@@ -216,6 +249,7 @@ services:
     build:
       context: .
       dockerfile: dashboard/Dockerfile
+    image: ${DOCKERHUB_USER:-devanshhh2651}/socmint-dashboard:latest
     env_file: .env
     environment:
       API_BASE_URL: http://api:8000
@@ -234,7 +268,7 @@ services:
   # on it (no other service lists it under depends_on).
   # ----------------------------------------------------------------------
   ollama:
-    image: ollama/ollama:latest
+    image: devanshhh2651/socmint-ollama:latest
     environment:
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
     # Serve in the background, wait for readiness, pull the model once (cached in
