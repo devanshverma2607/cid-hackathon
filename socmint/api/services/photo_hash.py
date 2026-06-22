@@ -61,6 +61,14 @@ CLIP_ENABLED = os.getenv("CLIP_IMAGE_EMBEDDINGS", "1").strip().lower() not in (
     "0", "false", "no", "off", "",
 )
 
+# --- AI photo geolocation (optional, graceful — Picarta) --------------------
+# Called ONLY when EXIF GPS is absent, so it supplements rather than replaces
+# hard metadata. Gated behind both AI_GEOLOCATION_ENABLED and PICARTA_API_KEY.
+AI_GEO_ENABLED = (
+    os.getenv("AI_GEOLOCATION_ENABLED", "0").strip().lower() in ("1", "true", "yes", "on")
+    and bool(os.getenv("PICARTA_API_KEY", "").strip())
+)
+
 # --- Face-recognition embedding (optional, graceful) ------------------------
 # pHash/CLIP match the SAME image; a face embedding matches the SAME PERSON
 # across DIFFERENT photos (different pose/lighting/crop). It detects the largest
@@ -325,6 +333,11 @@ class PhotoHasher:
                 if gps:
                     # Flat key so it surfaces in the evidence table + is easy to mine.
                     enrichment["exif_gps"] = f"{gps['lat']},{gps['lon']}"
+        # AI geolocation: called only when EXIF GPS is absent (cost control).
+        if AI_GEO_ENABLED and "exif_gps" not in enrichment and "ai_geolocation" not in enrichment:
+            ai_geo = self._ai_geolocate(data)
+            if ai_geo:
+                enrichment["ai_geolocation"] = ai_geo
         return enrichment
 
     @staticmethod
@@ -341,3 +354,44 @@ class PhotoHasher:
                 if isinstance(value, str) and value.strip().lower().startswith("http"):
                     return value.strip()
         return None
+
+    @staticmethod
+    def _ai_geolocate(data: bytes) -> Optional[dict]:
+        """Estimate photo location via Picarta AI (or None on any failure).
+
+        Only called when EXIF GPS is absent. The result is stored with
+        ``confidence: 'ai_inferred'`` so downstream code never conflates it
+        with hard EXIF evidence.
+        """
+        api_key = os.getenv("PICARTA_API_KEY", "").strip()
+        if not api_key:
+            return None
+        try:
+            import base64 as b64
+            import httpx
+
+            img_b64 = b64.b64encode(data).decode()
+            with httpx.Client(timeout=30.0) as client:
+                resp = client.post(
+                    "https://picarta.ai/classify",
+                    json={"TOKEN": api_key, "IMAGE": img_b64, "TOP_K": 1},
+                    headers={"Content-Type": "application/json"},
+                )
+                if resp.status_code != 200:
+                    return None
+                result = resp.json()
+                if not isinstance(result, dict):
+                    return None
+                lat = result.get("ai_lat") or (result.get("predictions", [{}])[0].get("lat") if result.get("predictions") else None)
+                lon = result.get("ai_lon") or (result.get("predictions", [{}])[0].get("lon") if result.get("predictions") else None)
+                if lat is not None and lon is not None:
+                    return {
+                        "lat": round(float(lat), 6),
+                        "lon": round(float(lon), 6),
+                        "confidence": "ai_inferred",
+                        "source": "picarta",
+                    }
+                return None
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("picarta AI geolocation failed: %s", exc)
+            return None

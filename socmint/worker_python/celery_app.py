@@ -102,6 +102,61 @@ celery_app.conf.beat_schedule = {
 }
 
 
+def _cancel_active_scans(case_id: str) -> None:
+    """Cancel all active/queued tasks from previous scans so the new scan runs immediately.
+
+    Strategy:
+    1. Purge ALL pending (unstarted) tasks from the default Celery queue.
+    2. Broadcast ``shutdown`` to currently executing tasks via Celery's revoke
+       with ``terminate=True`` (sends SIGTERM to the worker fork processes).
+    3. Log the cancellation to the audit trail.
+
+    This is aggressive but correct for the "one active scan at a time" policy:
+    the user explicitly wants a new scan to preempt any in-flight work. Evidence
+    already persisted by the old scan remains in the DB (it is never deleted);
+    only in-flight and queued tasks are discarded.
+    """
+    try:
+        import redis as redis_lib
+
+        client = redis_lib.Redis.from_url(REDIS_URL, decode_responses=True)
+
+        # 1. Purge all pending tasks from the default queue (not the 'go' queue).
+        purged = celery_app.control.purge()
+
+        # 2. Get active tasks from all workers and revoke them.
+        inspector = celery_app.control.inspect()
+        active = inspector.active() or {}
+        reserved = inspector.reserved() or {}
+
+        revoked_ids: list[str] = []
+        for worker_name, tasks in {**active, **reserved}.items():
+            for task_info in (tasks or []):
+                task_id = task_info.get("id")
+                if task_id:
+                    celery_app.control.revoke(task_id, terminate=True, signal="SIGTERM")
+                    revoked_ids.append(task_id)
+
+        # 3. Also purge the 'go' queue for Go worker tasks.
+        try:
+            go_queue_len = client.llen("go")
+            if go_queue_len:
+                client.delete("go")
+        except Exception:
+            pass
+
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(
+            "cancelled active scans: purged=%s, revoked=%d tasks [%s]",
+            purged, len(revoked_ids), ", ".join(revoked_ids[:10]),
+        )
+
+    except Exception as exc:  # noqa: BLE001 — best-effort; never block dispatch
+        import logging
+        logging.getLogger(__name__).warning("cancel_active_scans failed: %s", exc)
+
+
 def _prepare_fresh_run(case_id: str) -> None:
     """Clear stale per-case orchestration state so a new scan starts fresh.
 
@@ -115,6 +170,9 @@ def _prepare_fresh_run(case_id: str) -> None:
     budget instead of a half-spent one. Scoped to the case only — it never
     touches the broker queue, so concurrent scans are unaffected.
     """
+    # Cancel any in-flight / queued tasks from previous scans (one-at-a-time policy).
+    _cancel_active_scans(case_id)
+
     try:
         import redis  # local import keeps the module importable without redis
 

@@ -62,10 +62,18 @@ class PreservationService:
         except Exception as exc:  # noqa: BLE001
             logger.warning("preservation snapshot pull failed for %s: %s", url, exc)
 
+        # Step 8: check for an existing archive.today snapshot (best-effort).
+        archive_today_ref: Optional[str] = None
+        try:
+            archive_today_ref = self._archive_today_check(url)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("archive.today check failed for %s: %s", url, exc)
+
         return {
             "snapshot_ref": snapshot_ref,
             "snapshot_hash": snapshot_hash,
             "wayback_ref": wayback_ref,
+            "archive_today_ref": archive_today_ref,
             "preserved_at": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -126,3 +134,24 @@ class PreservationService:
                     )
         except Exception as exc:  # noqa: BLE001
             logger.debug("wayback snapshot pull failed: %s", exc)
+
+    def _archive_today_check(self, url: str) -> Optional[str]:
+        """Best-effort check for an existing archive.today snapshot.
+
+        Only checks for *existing* snapshots (GET with redirect follow).
+        Never triggers new captures (no CAPTCHA risk, no write operations).
+        Returns the snapshot URL or None — never raises.
+        """
+        try:
+            check_url = f"https://archive.ph/newest/{url}"
+            with httpx.Client(timeout=8.0, follow_redirects=True, headers={"User-Agent": USER_AGENT}) as client:
+                response = client.get(check_url)
+                # archive.ph redirects to the snapshot if one exists
+                if response.status_code == 200 and "archive.ph" in str(response.url):
+                    final = str(response.url)
+                    if final != check_url and "/newest/" not in final:
+                        return final
+            return None
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("archive.today check failed: %s", exc)
+            return None

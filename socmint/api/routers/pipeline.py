@@ -31,12 +31,14 @@ TIER_TOOLS = {
         "phone_enrich", "ignorant", "phoneinfoga", "abstractapi_phone"],
     2: ["sherlock", "maigret", "nexfil", "social_analyzer", "tracer", "enola",
         "detectdee", "holehe", "h8mail", "mailcat", "eyes", "mailsleuth",
-        "ghunt", "email2whatsapp", "xposedornot", "hudsonrock", "proxynova", "intelx", "hunterio"],
-    3: ["dorks_eye", "dorksint", "waybackurls", "huntpastebin", "forum_sweep"],
+        "ghunt", "email2whatsapp", "xposedornot", "hudsonrock", "proxynova", "intelx", "hunterio",
+        "emailrep", "epieos"],
+    3: ["dorks_eye", "dorksint", "waybackurls", "huntpastebin", "forum_sweep", "ahmia"],
     4: ["toutatis", "medor", "snapintel", "telegram_intel",
         "tiktok_userdata", "mastosint", "osintssky", "osintchan",
         "proton_intel", "linkedin2username", "theharvester", "finalrecon",
-        "webdiver", "github_api", "sublist3r", "dnstwist", "virustotal", "shodan", "hunterio"],
+        "webdiver", "github_api", "sublist3r", "dnstwist", "virustotal", "shodan", "hunterio",
+        "censys", "dnsdumpster", "reddit_intel"],
 }
 
 # Which seed types make each non-triggered tool *expected* to run for a case.
@@ -47,9 +49,10 @@ _USERNAME_TOOLS = {"blackbird", "whatsmyname", "sherlock", "maigret", "nexfil",
                    "hudsonrock", "proxynova", "intelx"}
 _EMAIL_TOOLS = {"zehef", "socialscan", "hashtray", "holehe", "h8mail", "mailcat",
                 "eyes", "mailsleuth", "ghunt", "email2whatsapp",
-                "xposedornot", "hudsonrock", "proxynova", "intelx", "hunterio"}
+                "xposedornot", "hudsonrock", "proxynova", "intelx", "hunterio",
+                "emailrep", "epieos"}
 _PHONE_TOOLS = {"phone_enrich", "ignorant", "phoneinfoga", "abstractapi_phone"}
-_PASSIVE_TOOLS = {"dorks_eye", "dorksint", "waybackurls", "huntpastebin", "forum_sweep"}
+_PASSIVE_TOOLS = {"dorks_eye", "dorksint", "waybackurls", "huntpastebin", "forum_sweep", "ahmia"}
 _TIER4_TOOLS = set(TIER_TOOLS[4])
 _TOOL_TIER = {t: tier for tier, tools in TIER_TOOLS.items() for t in tools}
 

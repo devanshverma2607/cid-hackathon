@@ -33,6 +33,8 @@ from worker_python.adapters.email.hudsonrock import HudsonRockAdapter
 from worker_python.adapters.email.proxynova import ProxyNovaAdapter
 from worker_python.adapters.email.intelx import IntelXAdapter
 from worker_python.adapters.email.hunterio import HunterIOAdapter
+from worker_python.adapters.email.emailrep import EmailRepAdapter
+from worker_python.adapters.email.epieos import EpieosAdapter
 
 # Phone adapters
 from worker_python.adapters.phone.phone_enrich import PhoneEnrichAdapter
@@ -46,6 +48,7 @@ from worker_python.adapters.passive.dorksint import DorksintAdapter
 from worker_python.adapters.passive.wayback_urls import WayBackURLsAdapter
 from worker_python.adapters.passive.hunt_pastebin import HuntPastebinAdapter
 from worker_python.adapters.passive.forum_sweep import ForumSweepAdapter
+from worker_python.adapters.passive.ahmia import AhmiaAdapter
 
 # Platform (Tier 4) adapters
 from worker_python.adapters.platform.toutatis import ToutatisAdapter
@@ -65,6 +68,9 @@ from worker_python.adapters.platform.sublist3r import Sublist3rAdapter
 from worker_python.adapters.platform.dnstwist import DnstwistAdapter
 from worker_python.adapters.platform.virustotal import VirusTotalAdapter
 from worker_python.adapters.platform.shodan_intel import ShodanIntelAdapter
+from worker_python.adapters.platform.censys import CensysAdapter
+from worker_python.adapters.platform.dnsdumpster import DnsDumpsterAdapter
+from worker_python.adapters.platform.reddit_intel import RedditIntelAdapter
 
 # Go-binary adapters
 from worker_go.adapters.enola import EnolaAdapter
@@ -98,7 +104,7 @@ class FallbackChainManager:
             HoleheAdapter, H8mailAdapter, MailcatAdapter, EyesAdapter,
             MailsleuthAdapter, GhuntAdapter, Email2WhatsAppAdapter,
             XposedOrNotAdapter, HudsonRockAdapter, ProxyNovaAdapter, IntelXAdapter,
-            HunterIOAdapter,
+            HunterIOAdapter, EmailRepAdapter, EpieosAdapter,
         ],
         "phone_tier1": [
             PhoneEnrichAdapter, IgnorantAdapter, PhoneInfogaAdapter,
@@ -106,7 +112,7 @@ class FallbackChainManager:
         ],
         "passive_recon": [
             DorksEyeAdapter, DorksintAdapter, WayBackURLsAdapter, HuntPastebinAdapter,
-            ForumSweepAdapter,
+            ForumSweepAdapter, AhmiaAdapter,
         ],
     }
 
@@ -122,10 +128,11 @@ class FallbackChainManager:
         "protonmail": [ProtonIntelAdapter],
         "linkedin": [LinkedIn2UsernameAdapter],
         "github": [GitHubApiAdapter],
+        "reddit": [RedditIntelAdapter],
         "domain": [
             TheHarvesterAdapter, FinalReconAdapter, WebdiverAdapter,
             Sublist3rAdapter, DnstwistAdapter, VirusTotalAdapter, ShodanIntelAdapter,
-            HunterIOAdapter,
+            HunterIOAdapter, CensysAdapter, DnsDumpsterAdapter,
         ],
     }
 
@@ -308,7 +315,7 @@ class FallbackChainManager:
         for adapter_cls in (
             TheHarvesterAdapter, FinalReconAdapter, WebdiverAdapter,
             Sublist3rAdapter, DnstwistAdapter, VirusTotalAdapter, ShodanIntelAdapter,
-            HunterIOAdapter,
+            HunterIOAdapter, CensysAdapter, DnsDumpsterAdapter,
         ):
             pos, marker = self._run_trigger_adapter(
                 adapter_cls, domain, case_id, run_id, "domain"

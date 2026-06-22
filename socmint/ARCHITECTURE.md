@@ -3,8 +3,10 @@
 > **SOCMINT** (Social Media Intelligence) is a lawful, auditable OSINT pipeline that takes a single
 > seed identifier about a subject (a username, email, phone number, or profile URL) and autonomously
 > **discovers → correlates → preserves → reports** their cross‑platform digital footprint. It fuses
-> 50+ OSINT tools, a weighted‑signal correlation model, recursive cross‑tool pivoting, identity‑cluster
-> resolution, and forensic evidence preservation into one investigator‑facing system.
+> 68+ OSINT tools (keyless + keyed API adapters), a weighted‑signal correlation model, recursive
+> cross‑tool pivoting, identity‑cluster resolution, multi‑modal photo matching (pHash + CLIP +
+> FaceNet), optional LLM narrative polish, and forensic evidence preservation into one
+> investigator‑facing system.
 
 This document is the authoritative engineering reference for the system. It is **backend‑ and
 logic‑heavy by design**: the orchestration, the scoring engines, and the data model are documented in
@@ -38,7 +40,7 @@ full; the frontend is summarised.
 Given **one or more identifiers** for a single subject, SOCMINT produces a court‑defensible
 intelligence package:
 
-- **Discover** — sweep the subject across 700+ platforms and dozens of data sources.
+- **Discover** — sweep the subject across 700+ platforms and dozens of data sources (keyless + keyed).
 - **Correlate** — decide which discovered accounts belong to the *same* human, with explainable,
   weighted confidence.
 - **Preserve** — capture forensic snapshots (HTML + Wayback + hashes) of every confirmed finding.
@@ -76,16 +78,19 @@ The pipeline runs tools in four tiers and then closes the loop with a recursive 
 |---|---|---|
 | API gateway | **FastAPI** + Uvicorn | REST surface, case intake, read models |
 | Task queue | **Celery 5** + **Redis 7** | Distributed orchestration (broker + result backend) |
-| Relational store | **PostgreSQL 15** + **pgvector** | Cases, evidence, links, audit + 384‑dim bio embeddings |
-| Graph store | **Neo4j 5 Community** | Identity graph (`Account`, `SAME_AS`, `DISCOVERED`, …) |
+| Task scheduler | **Celery Beat** | Durable periodic scan‑recovery (survives worker restarts) |
+| Relational store | **PostgreSQL 15** + **pgvector** | Cases, evidence, links, audit + 384‑dim bio / 512‑dim CLIP / 512‑dim FaceNet embeddings |
+| Graph store | **Neo4j 5 Community** + GDS plugin | Identity graph (`Account`, `SAME_AS`, `DISCOVERED`, …) + Louvain community detection |
 | Object store | **MinIO** (S3‑compatible) | Preserved snapshots, screenshots, signed report bundles |
 | Anonymised egress | **Tor** SOCKS proxy sidecar | Routes high‑block‑risk Tier 3 / dork traffic |
 | Python worker | Celery worker, concurrency 4 | Python OSINT adapters (Tiers 1‑4) |
 | Go worker | Celery worker, concurrency 2 | Compiled Go OSINT binaries (Enola, DetectDee, …) |
 | Dashboard | **Streamlit** | 9‑page analyst UI |
-| ML | sentence‑transformers (`all-MiniLM-L6-v2`), imagehash, python‑Levenshtein | Bio similarity, perceptual photo hashing, fuzzy handle matching |
+| ML | sentence‑transformers (`all-MiniLM-L6-v2`), CLIP (`clip-ViT-B-32`), FaceNet (`InceptionResnetV1/vggface2`), MTCNN, imagehash, python‑Levenshtein | Bio similarity, reverse‑image embedding, cross‑photo face matching, perceptual hashing, fuzzy handle matching |
+| LLM (optional) | **Ollama** + `llama3.2:3b` (local, no data egress) | Grounded narrative polish for insight/profile summaries |
 
 All services are containerised and orchestrated by [docker-compose.yml](docker-compose.yml).
+All container images are published under `devanshhh2651/socmint-*` on Docker Hub.
 
 ---
 
@@ -95,6 +100,7 @@ All services are containerised and orchestrated by [docker-compose.yml](docker-c
 flowchart TB
     subgraph UI["Analyst Layer"]
         DASH["Streamlit Dashboard\n(9 pages, :8501)"]
+        OLLAMA["Ollama\n(:11434)\nLocal LLM"]
     end
 
     subgraph GW["API Gateway"]
@@ -105,6 +111,7 @@ flowchart TB
         REDIS[("Redis 7\nbroker + backend\n+ pivot visited-set")]
         WPY["worker_python\nCelery (conc=4)\nTier 1-4 Python adapters"]
         WGO["worker_go\nCelery (conc=2)\nGo binaries"]
+        BEAT["worker_beat\nCelery Beat\nDurable recovery"]
     end
 
     subgraph DATA["Data Stores"]
@@ -126,6 +133,7 @@ flowchart TB
 
     REDIS <--> WPY
     REDIS <--> WGO
+    BEAT -->|periodic recovery| REDIS
     WPY -->|evidence + links| PG
     WPY -->|SAME_AS / DISCOVERED| NEO
     WPY -->|snapshots| MINIO
@@ -133,9 +141,11 @@ flowchart TB
     WPY -->|sensitive queries| TOR --> NET
     WPY -->|direct| NET
     WGO --> NET
+    API -.->|narrative polish| OLLAMA
+    WPY -.->|narrative polish| OLLAMA
 ```
 
-### Service inventory (9 containers)
+### Service inventory (11 containers)
 
 | Service | Port(s) | Purpose | Reload behaviour |
 |---|---|---|---|
@@ -143,11 +153,13 @@ flowchart TB
 | `dashboard` | 8501 | Streamlit UI | Pages hot‑reload; shared `socmint_ui.py` is cached → restart after editing it |
 | `worker_python` | — | Python adapters, Tiers 1‑4, pipeline orchestration | Restart after editing `worker_python/*.py` |
 | `worker_go` | — | Go OSINT binaries; publishes them to a shared volume | — |
+| `worker_beat` | — | Celery Beat scheduler — durable periodic scan‑recovery | Restart after editing `recovery_tasks.py` |
 | `postgres` | 5432 | Relational store (schema auto‑loaded on init) | — |
-| `neo4j` | 7474 (UI), 7687 (Bolt) | Identity graph | — |
+| `neo4j` | 7474 (UI), 7687 (Bolt) | Identity graph + GDS plugin (Louvain community detection) | — |
 | `redis` | 6379 | Celery broker/backend + pivot Redis sets | — |
 | `minio` | 9000 (API), 9001 (console) | Object storage | — |
 | `tor` | 9050 (internal) | Anonymised egress sidecar | — |
+| `ollama` | 11434 | Local LLM runtime (grounded narrative polish, optional) | — |
 
 ---
 
@@ -204,8 +216,11 @@ erDiagram
         FLOAT confidence_raw
         JSONB signal_weights
         VECTOR bio_embedding
+        VECTOR image_embedding
+        VECTOR face_embedding
         TEXT snapshot_ref
         TEXT snapshot_hash
+        TEXT archive_today_ref
         JSONB platform_enrichment
         TEXT notes
     }
@@ -245,7 +260,9 @@ erDiagram
   `UNIQUE (case_id, source_platform, result_value, seed_value)`, mirrored by `uq_evidence_dedup` for
   `ON CONFLICT` upserts. `tool_tier ∈ {1,2,3,4}` (1=fast, 2=deep, 3=passive, 4=triggered); `source_tier
   ∈ {1,2,3,4}` (1=API, 2=public web, 3=archive, 4=inferred). `bio_embedding vector(384)` powers
-  semantic bio similarity. Indexed on `(case_id, tool_tier)` and `(source_platform, result_value)`.
+  semantic bio similarity; `image_embedding vector(512)` stores CLIP reverse‑image embeddings;
+  `face_embedding vector(512)` stores FaceNet face‑recognition vectors. Indexed on
+  `(case_id, tool_tier)` and `(source_platform, result_value)`.
 - **`identity_links`** — One row per scored cross‑platform pair. `confidence_tier ∈ {HIGH, MEDIUM, LOW,
   DISCARD}`; `signal_breakdown` is the explainable per‑signal JSON. `analyst_decision ∈ {CONFIRMED,
   REJECTED, FLAG_UNCERTAIN}` after review.
@@ -379,14 +396,18 @@ against a static **`TIER_TOOLS`** registry in [api/routers/pipeline.py](api/rout
 
 ```python
 TIER_TOOLS = {
-    1: ["blackbird", "whatsmyname", "zehef", "socialscan", "hashtray", "ignorant"],
+    1: ["blackbird", "whatsmyname", "zehef", "socialscan", "hashtray",
+        "phone_enrich", "ignorant", "phoneinfoga", "abstractapi_phone"],
     2: ["sherlock", "maigret", "nexfil", "social_analyzer", "tracer", "enola",
         "detectdee", "holehe", "h8mail", "mailcat", "eyes", "mailsleuth",
-        "ghunt", "email2whatsapp", "xposedornot", "hudsonrock", "proxynova"],
+        "ghunt", "email2whatsapp", "xposedornot", "hudsonrock", "proxynova",
+        "intelx", "hunterio"],
     3: ["dorks_eye", "dorksint", "waybackurls", "huntpastebin", "forum_sweep"],
-    4: ["toutatis", "medor", "snapintel", "telegram_intel", "tiktok_userdata",
-        "mastosint", "osintssky", "osintchan", "proton_intel", "linkedin2username",
-        "theharvester", "finalrecon", "webdiver", "github_api", "sublist3r", "dnstwist"],
+    4: ["toutatis", "medor", "snapintel", "telegram_intel",
+        "tiktok_userdata", "mastosint", "osintssky", "osintchan",
+        "proton_intel", "linkedin2username", "theharvester", "finalrecon",
+        "webdiver", "github_api", "sublist3r", "dnstwist",
+        "virustotal", "shodan", "hunterio"],
 }
 ```
 
@@ -396,17 +417,19 @@ Per‑tool status:
 - **`skipped`** — only `unavailable`/`blocked` marker rows, or a `TOOL_SKIPPED` audit event ("ran empty").
 - **`pending`** — no rows and no markers.
 
-Lifecycle state (30‑second activity window): `running` if the case was created or last produced
-evidence ≤ 30 s ago; `complete` if a `CORRELATION_COMPLETE`/`PIVOT_CORRELATION_COMPLETE` event exists
-(or hits exist and activity is stale); else `idle`.
+Lifecycle state machine is **activity‑driven** with a configurable `ACTIVE_WINDOW` (default **90 s**):
+a scan is `running` while fresh evidence keeps landing or while the correlation watchdog has not yet
+fired; `complete` once everything has gone quiet; with finer phases (`queued`, `sweeping`, `analysing`,
+`pivoting`, `complete`, `idle`, `failed`) for the UI.
 
 ---
 
 ## 6. The Processing Pipeline (Celery Orchestration)
 
 Orchestration lives in [worker_python/celery_app.py](worker_python/celery_app.py). Celery is configured
-with JSON serialization, UTC, and includes the six task modules (`tier1_tasks`, `tier2_tasks`,
-`tier3_tasks`, `tier4_tasks`, `pivot_tasks`, `preservation_tasks`).
+with JSON serialization, UTC, `task_acks_late=True` (crash resilience), and includes seven task modules
+(`tier1_tasks`, `tier2_tasks`, `tier3_tasks`, `tier4_tasks`, `pivot_tasks`, `preservation_tasks`,
+`recovery_tasks`). A Celery Beat schedule emits the durable `recover_stuck_correlations` periodic task.
 
 ### 6.1 Dispatch: the chord + watchdog
 
@@ -446,6 +469,12 @@ intermittently drop a header task, in which case the chord never reaches its com
 `CORRELATION_COMPLETE` event for the run and is a **no‑op on the happy path**, otherwise it runs the
 aggregation itself.
 
+**Crash resilience** — `task_acks_late=True` defers acknowledgement to task *completion*, so a killed
+worker's in‑flight tasks are redelivered by the broker instead of silently lost.
+`broker_transport_options.visibility_timeout = 3600` prevents premature redelivery of slow sweeps.
+`worker_prefetch_multiplier = 1` minimises at‑risk work. Our tasks are idempotent (evidence upserts on
+a unique key; correlation/pivot are guarded), so re‑execution is safe.
+
 ### 6.2 Tier → Tool Chains
 
 Tool chains are defined in the `FallbackChainManager` ([worker_python/adapters/fallback_chain.py](worker_python/adapters/fallback_chain.py)):
@@ -453,11 +482,11 @@ Tool chains are defined in the `FallbackChainManager` ([worker_python/adapters/f
 | Chain | Tools (in order) |
 |---|---|
 | `username_tier1` | `blackbird`, `whatsmyname` |
-| `username_tier2` | `sherlock`, `maigret`, `nexfil`, `social_analyzer`, `tracer`, `enola`, `detectdee`, `hudsonrock`, `proxynova` |
+| `username_tier2` | `sherlock`, `maigret`, `nexfil`, `social_analyzer`, `tracer`, `enola`, `detectdee`, `hudsonrock`, `proxynova`, **`intelx`** |
 | `email_tier1` | `zehef`, `socialscan`, `hashtray` |
-| `email_tier2` | `holehe`, `h8mail`, `mailcat`, `eyes`, `mailsleuth`, `ghunt`, `email2whatsapp`, `xposedornot`, `hudsonrock`, `proxynova` |
-| `phone_tier1` | `phone_enrich`, `ignorant`, `phoneinfoga` |
-| `passive_recon` (T3) | `dorks_eye`, `dorksint`, `waybackurls`, `hunt_pastebin`, `forum_sweep` |
+| `email_tier2` | `holehe`, `h8mail`, `mailcat`, `eyes`, `mailsleuth`, `ghunt`, `email2whatsapp`, `xposedornot`, `hudsonrock`, `proxynova`, **`intelx`**, **`hunterio`**, **`emailrep`**, **`epieos`** |
+| `phone_tier1` | `phone_enrich`, `ignorant`, `phoneinfoga`, **`abstractapi_phone`** |
+| `passive_recon` (T3) | `dorks_eye`, `dorksint`, `waybackurls`, `hunt_pastebin`, `forum_sweep`, **`ahmia`** |
 
 **Tier 4 trigger matrix** (`platform_map`, fired per confirmed platform after correlation):
 
@@ -473,7 +502,8 @@ Tool chains are defined in the `FallbackChainManager` ([worker_python/adapters/f
 | protonmail | `proton_intel` |
 | linkedin | `linkedin2username` |
 | github | `github_api` |
-| domain | `theharvester`, `finalrecon`, `webdiver`, `sublist3r`, `dnstwist` |
+| reddit | **`reddit_intel`** (keyed OAuth2 user profile) |
+| domain | `theharvester`, `finalrecon`, `webdiver`, `sublist3r`, `dnstwist`, **`virustotal`**, **`shodan`**, **`hunterio`**, **`censys`**, **`dnsdumpster`** |
 
 ### 6.3 Celery Task Registry
 
@@ -489,6 +519,7 @@ Tool chains are defined in the `FallbackChainManager` ([worker_python/adapters/f
 | `pivot.domain_recon` | pivot_tasks | Domain tool matrix |
 | `pivot.expand` / `pivot.collect` | pivot_tasks | Recursive seed re‑dispatch loop |
 | `preservation.preserve_batch` | preservation_tasks | Background forensic preservation |
+| `pipeline.recover_stuck_correlations` | recovery_tasks | **Beat‑driven** durable scan recovery (periodic) |
 | `go.run_adapter` | worker_go/tasks | Run a single Go‑binary adapter |
 
 **Queue isolation:** all tasks above run on the default `celery` queue consumed
@@ -774,17 +805,42 @@ and honours the `[candidate-email]` sentinel to keep guessed identifiers out of 
 
 - **Graph Builder** ([api/services/graph_builder.py](api/services/graph_builder.py)) — Neo4j writes
   (`upsert_account_node`, `upsert_identity_link` → `SAME_AS`, `upsert_pivot_edge` → `DISCOVERED`) and the
-  Plotly export for the dashboard.
+  Plotly export for the dashboard. Degrades to an in‑process label‑propagation fallback if the GDS
+  plugin is absent.
 - **Preservation** ([api/services/preservation.py](api/services/preservation.py)) — fetches HTML, saves
   to the Wayback Machine, captures snapshots/screenshots, hashes them, and stores artifacts in MinIO.
 - **Provenance** ([api/services/provenance.py](api/services/provenance.py)) — the DB writer:
   dedup‑aware evidence upsert (`write_to_db`), preservation‑ref patching, enrichment attachment, and
   append‑only `log_audit_event`.
-- **Photo Hash** ([api/services/photo_hash.py](api/services/photo_hash.py)) — perceptual avatar hashing
-  (pHash) that feeds the `W_PHOTO_MATCH` correlation/persona signal.
+- **Photo Hash** ([api/services/photo_hash.py](api/services/photo_hash.py)) — multi‑modal avatar
+  analysis pipeline. Downloads an avatar image once and computes:
+  - **pHash** (Pillow + ImageHash) — perceptual hash for byte‑near‑identical image matching (Hamming
+    distance ≤ 8 feeds `W_PHOTO_MATCH`).
+  - **CLIP embedding** (sentence‑transformers `clip-ViT-B-32`, 512‑d) — reverse‑image similarity that
+    links the *same* picture after re‑encoding, resizing, or recolouring. Stored as
+    `image_embedding vector(512)` in PostgreSQL. Gated on `CLIP_IMAGE_EMBEDDINGS` env var.
+  - **FaceNet embedding** (MTCNN face detection + InceptionResnetV1/vggface2, 512‑d, L2‑normalised) —
+    links the *same person* across *different* photos (different pose/lighting/crop). Stored as
+    `face_embedding vector(512)`. Gated on `FACE_RECOGNITION` env var.
+  - **EXIF extraction** — GPS coordinates, camera model, capture timestamp from image metadata.
+    Geotagged images surface as a flat `exif_gps` enrichment key for geolocation leads.
 - **Report Generator** ([api/services/report_generator.py](api/services/report_generator.py)) — builds
   the JSON evidence package + PDF, **signs** the bundle as `sha256(json_bytes + pdf_bytes)`, and
   uploads all three artifacts (JSON/PDF/`.sha256`) to MinIO under `cases/{id}/reports/`.
+
+### 7.9 LLM Narrative Service (Optional)
+
+[api/services/llm_narrative.py](api/services/llm_narrative.py) — augments the deterministic
+insight/profile narratives with fluent prose generated by a locally‑hosted **Ollama** model
+(`llama3.2:3b` by default). **No data leaves the deployment** — the model runs in a sidecar container.
+
+- **Grounded generation** — the model receives only the structured facts the deterministic engines
+  already derived and is instructed to rephrase (never invent identifiers or speculate about guilt).
+- **Graceful degradation** — when Ollama is disabled (`LLM_NARRATIVES_ENABLED=0`), unreachable, or the
+  model is missing, `LLMNarrator.generate()` returns `None` and callers fall back to deterministic
+  narrative. A 60‑second negative‑cooldown cache prevents repeated slow probes.
+- **Consumers** — the Profile Engine and Insight Engine optionally call `LLMNarrator().generate(facts)`
+  to polish their narrative summaries.
 
 ---
 
@@ -818,10 +874,13 @@ through Tor when requested, returns `("", "timeout…", 124)` on timeout) and `m
 (injects context + tool defaults).
 
 **Degradation semantics**: positive `result_type`s (`account_found`, `email_registered`, `breach_hit`,
-`gravatar_hit`, `google_hit`, `whatsapp_hit`, `domain_hit`, `dork_hit`, `archive_hit`, `phone_intel`)
+`gravatar_hit`, `google_hit`, `whatsapp_hit`, `domain_hit`, `dork_hit`, `archive_hit`, `phone_intel`,
+`email_reputation`, `onion_hit`)
 feed the engines; `unavailable` ("ran empty / transient error") and `blocked` ("rate‑limited / auth
 failure") are persisted as markers so analysts distinguish *ran‑empty* from *never‑ran*, but are excluded
-from correlation.
+from correlation. `email_reputation` results are explicitly excluded from correlation and persona
+scoring (they carry risk signals, not identity linkage). `onion_hit` is the dark‑web analogue of
+`dork_hit`, with the same decay semantics.
 
 ### 8.2 FallbackChainManager
 
@@ -834,23 +893,39 @@ chains:
 - **`trigger_platform_tools(platform, url, …)`** / **`trigger_domain_tools(domain, …)`** — fire the
   Tier‑4 matrices with the same marker + dedup logic.
 
-### 8.3 Tool Catalogue (50+ adapters)
+### 8.3 Tool Catalogue (68+ adapters)
 
 | Category | Tools |
 |---|---|
-| **Username** | blackbird, whatsmyname, sherlock, maigret, nexfil, social_analyzer, tracer, enola*, detectdee* |
-| **Email** | zehef, socialscan, hashtray, holehe, h8mail, mailcat, eyes, mailsleuth*, ghunt, email2whatsapp* |
-| **Breach / leak** | h8mail, xposedornot (keyless breach analytics), hudsonrock (keyless infostealer), proxynova (keyless combo-list, credentials masked) |
-| **Phone** | phone_enrich, ignorant, phoneinfoga |
-| **Passive / dork** | dorks_eye, dorksint, waybackurls, hunt_pastebin, forum_sweep (forums/blogs/comments) |
-| **Domain** | theharvester, finalrecon, webdiver, sublist3r, dnstwist |
-| **Platform (Tier 4)** | toutatis, medor (instagram), snapintel (snapchat), telegram_intel (telegram), tiktok_userdata (tiktok), mastosint (mastodon), osintssky (bluesky), osintchan (4chan), proton_intel (protonmail), linkedin2username (linkedin), github_api + githound* (github) |
-| **Universal** | socid_extractor (profile‑URL identifier extraction), photo hasher (avatar pHash) |
+| **Username** | blackbird, whatsmyname, sherlock, maigret, nexfil, social_analyzer, tracer, enola\*, detectdee\* |
+| **Email** | zehef, socialscan, hashtray, holehe, h8mail, mailcat, eyes, mailsleuth\*, ghunt, email2whatsapp\*, **emailrep** (reputation), **epieos** (reverse‑email‑to‑accounts) |
+| **Breach / leak** | h8mail, xposedornot (keyless), hudsonrock (keyless infostealer), proxynova (keyless combo‑list), **intelx** (keyed, leak/paste/darkweb) |
+| **Phone** | phone_enrich, ignorant, phoneinfoga, **abstractapi_phone** (keyed live carrier lookup) |
+| **Passive / dork** | dorks_eye, dorksint, waybackurls, hunt_pastebin, forum_sweep, **ahmia** (Tor‑routed dark‑web index search, `onion_hit`) |
+| **Domain** | theharvester, finalrecon, webdiver, sublist3r, dnstwist, **virustotal** (keyed passive DNS/reputation), **shodan** (keyed subdomain enumeration), **hunterio** (keyed domain email search), **censys** (keyed host/cert intelligence), **dnsdumpster** (keyed subdomain/DNS recon) |
+| **Email enrichment** | **hunterio** (keyed email verification + web source discovery) |
+| **Platform (Tier 4)** | toutatis, medor (instagram), snapintel (snapchat), telegram_intel (telegram), tiktok_userdata (tiktok), mastosint (mastodon), osintssky (bluesky), osintchan (4chan), proton_intel (protonmail), linkedin2username (linkedin), github_api + githound\* (github), **reddit_intel** (reddit, keyed OAuth2) |
+| **Universal** | socid_extractor (profile‑URL identifier extraction), photo hasher (pHash + CLIP + FaceNet + EXIF + **Picarta AI geolocation**) |
+| **Preservation** | gowitness (screenshot), wayback (archive.org save), **archive.today** (best‑effort existing‑snapshot check) |
 
 `*` = compiled **Go binary** ([worker_go/adapters/](worker_go/adapters)); the rest are Python. Go
 binaries are baked into the `worker_go` image and published to a shared `go_tools` volume that
 `worker_python` mounts read‑only, so the Python worker can health‑check and run them inline in its
 Tier‑2 chains.
+
+**Keyed adapters** (gated on API keys, degrade gracefully to `unavailable` when absent): `intelx`
+(`INTELX_API_KEY`), `hunterio` (`HUNTERIO_API_KEY`), `virustotal` (`VIRUSTOTAL_API_KEY`), `shodan`
+(`SHODAN_API_KEY`), `abstractapi_phone` (`ABSTRACTAPI_PHONE_KEY`), `github_api` (`GITHUB_TOKEN`),
+`ghunt` (`GHUNT_COOKIES_PATH`), `toutatis` (`INSTAGRAM_SESSION_ID`), `telegram_intel`
+(`TELEGRAM_API_ID/HASH/SESSION`), **`emailrep`** (`EMAILREP_API_KEY`, optional—works keyless at low volume),
+**`censys`** (`CENSYS_API_ID` + `CENSYS_API_SECRET`), **`dnsdumpster`** (`DNSDUMPSTER_API_KEY`),
+**`reddit_intel`** (`REDDIT_CLIENT_ID` + `REDDIT_CLIENT_SECRET`).
+
+**Service integrations** (not standalone adapters): **Picarta AI geolocation** (`PICARTA_API_KEY` +
+`AI_GEOLOCATION_ENABLED`)—called by `photo_hash.py` only when EXIF GPS is absent, results stored as
+`ai_geolocation` enrichment with `confidence: "ai_inferred"`. **Archive.today**—called by
+`preservation.py` as a best‑effort check for existing snapshots (never triggers new captures);
+result stored as `archive_today_ref`.
 
 ### 8.4 Network, Proxy & SSRF Guarding
 
@@ -864,7 +939,10 @@ backends and safety controls:
   192.168/16), link‑local (169.254), reserved/multicast, and metadata hosts; only `http(s)` to public
   literal hosts is allowed.
 - **Keyless backends** — `ddg_search` (DuckDuckGo HTML → Mojeek fallback), `crtsh_subdomains` (3 retries,
-  backoff), `dns_a_records`, `ssl_cert_info`, and `username_profiles` (curated multi‑platform checks).
+  backoff), `dns_a_records`, `ssl_cert_info`, `clean_domain`, `http_get`, `classify_seed`,
+  `select_dorks`, and `username_profiles` (curated multi‑platform checks against 12 services:
+  GitHub, GitLab, DockerHub, Keybase, PyPI, Gitea, Codeberg, Bitbucket, Replit, Telegram,
+  HackerNews, WordPress).
 - **Timeouts** — HTTP 25 s; crt.sh 40 s; per‑tool subprocess 120‑600 s.
 
 Several tools that lacked a usable CLI in the image are **re‑implemented** keylessly (e.g. theHarvester
@@ -953,12 +1031,17 @@ Defined in [docker-compose.yml](docker-compose.yml).
 | `miniodata` | minio | Object artifacts |
 | `evidence_cases` | api, workers | Local case output dir (`/app/cases`) |
 | `go_tools` | worker_go (rw), worker_python (ro) | Compiled Go binaries shared across workers |
+| `hf_cache` | worker_python | Hugging Face model cache (CLIP + MiniLM, ~600 MB) |
+| `torch_cache` | worker_python | FaceNet model weights (~110 MB) |
+| `ollama_models` | ollama | LLM model weights (llama3.2:3b) |
 
 ### 11.2 Startup ordering
 
 `postgres`, `redis`, `minio` expose health checks; `api` waits for postgres/neo4j/redis/minio healthy.
-`worker_python` additionally waits for `tor` and `worker_go`. On boot, `worker_go` copies its baked
-binaries into the shared `go_tools` volume before starting its Celery worker.
+`worker_python` additionally waits for `tor` and `worker_go`. `worker_beat` waits for postgres/redis.
+`ollama` is optional (no service depends on it). On boot, `worker_go` copies its baked binaries into
+the shared `go_tools` volume before starting its Celery worker; `ollama` pulls the configured model
+(cached in the `ollama_models` volume) before serving.
 
 ### 11.3 Operational notes
 
@@ -968,7 +1051,7 @@ binaries into the shared `go_tools` volume before starting its Celery worker.
 - Dashboard page files hot‑reload; the shared `socmint_ui.py` is cached in `sys.modules` → restart
   `dashboard` after editing it.
 - **URLs**: dashboard `http://localhost:8501`, API docs `http://localhost:8000/docs`, Neo4j browser
-  `http://localhost:7474`, MinIO console `http://localhost:9001`.
+  `http://localhost:7474`, MinIO console `http://localhost:9001`, Ollama `http://localhost:11434`.
 
 ---
 
@@ -983,8 +1066,10 @@ binaries into the shared `go_tools` volume before starting its Celery worker.
 | **Anonymised egress** | Tor sidecar for high‑block‑risk queries; automatic direct fallback. |
 | **Identity‑conflation guards** | 2‑signal corroboration rule; conflict penalties (bot/timezone/language/blacklist); candidate emails fenced off from confirmed identity, risk, and clustering. |
 | **Bounded execution** | Pivot depth/breadth/total caps; preservation per‑tool cap; enrichment/domain caps; capped wire payloads — no runaway recursion or memory blowups. |
-| **Graceful degradation** | Tool crashes → `unavailable`/`blocked` markers; preservation/enrichment never abort a run. |
+| **Graceful degradation** | Tool crashes → `unavailable`/`blocked` markers; preservation/enrichment never abort a run. Keyed adapters degrade when keys are absent. |
 | **Masked‑data hygiene** | Masked emails/phones are never used as pivot seeds or confirmed contacts. |
+| **Crash‑resilient orchestration** | `task_acks_late` + broker visibility timeout + beat‑driven recovery ensure no scan is permanently stuck. |
+| **Local‑only LLM** | Narrative generation runs via a local Ollama container; no investigation data is sent to external APIs. |
 
 ---
 
@@ -1005,7 +1090,27 @@ binaries into the shared `go_tools` volume before starting its Celery worker.
 | `PIVOT_MAX_SEEDS_PER_HOP` | `10` | Pivot breadth cap |
 | `PIVOT_MAX_TOTAL_SEEDS` | `40` | Pivot total cap |
 | `CORRELATION_WATCHDOG_SECONDS` | `540` | Chord‑drop safety net |
+| `CORRELATION_SWEEP_PERIOD` | `120` | Beat‑driven recovery interval (seconds) |
+| `RECOVERY_QUIET_SECONDS` | `180` | Stuck‑run detection quiet window |
+| `BROKER_VISIBILITY_TIMEOUT` | `3600` | Redis unacked‑task redelivery timeout |
+| `PIPELINE_ACTIVE_WINDOW_SECONDS` | `90` | Activity window for lifecycle state machine |
 | `GHUNT_COOKIES_PATH`, `INSTAGRAM_SESSION_ID`, `GITHUB_TOKEN`, `TELEGRAM_API_ID/HASH/SESSION`, `H8MAIL_API_KEY`, `HIBP_API_KEY` | — | Optional tool credentials (tools degrade gracefully when absent) |
+| `INTELX_API_KEY` | — | Intelligence X leak/paste/darkweb search |
+| `HUNTERIO_API_KEY` | — | Hunter.io email verification + domain email discovery |
+| `VIRUSTOTAL_API_KEY` | — | VirusTotal domain passive‑DNS intel |
+| `SHODAN_API_KEY` | — | Shodan subdomain/DNS enumeration |
+| `ABSTRACTAPI_PHONE_KEY` | — | AbstractAPI live phone validation |
+| `OLLAMA_BASE_URL` | `http://ollama:11434` | Ollama LLM server URL |
+| `OLLAMA_MODEL` | `llama3.2:3b` | LLM model for narrative generation |
+| `LLM_NARRATIVES_ENABLED` | `1` | Enable/disable LLM narrative polish |
+| `CLIP_IMAGE_EMBEDDINGS` | `1` | Enable/disable CLIP reverse‑image embeddings |
+| `FACE_RECOGNITION` | `1` | Enable/disable FaceNet face matching |
+| `EMAILREP_API_KEY` | — | EmailRep.io email reputation (optional — works keyless at low volume) |
+| `CENSYS_API_ID` / `CENSYS_API_SECRET` | — | Censys host/certificate intelligence (HTTP Basic auth) |
+| `DNSDUMPSTER_API_KEY` | — | DNS Dumpster subdomain/DNS recon |
+| `PICARTA_API_KEY` | — | Picarta AI photo geolocation (requires `AI_GEOLOCATION_ENABLED=1`) |
+| `AI_GEOLOCATION_ENABLED` | `0` | Master toggle for AI‑based photo geolocation |
+| `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` | — | Reddit OAuth2 user profile enrichment |
 
 ### 13.2 Tuning constants (in code)
 
@@ -1042,5 +1147,5 @@ binaries into the shared `go_tools` volume before starting its Celery worker.
 
 ---
 
-*Generated as the engineering architecture reference for SOCMINT v2.0. The source of truth for any
+*Generated as the engineering architecture reference for SOCMINT v2.1. The source of truth for any
 detail is the code in [api/](api), [worker_python/](worker_python), and [worker_go/](worker_go).*

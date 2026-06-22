@@ -24,6 +24,8 @@ ResultType = Literal[
     "dork_hit",
     "archive_hit",
     "phone_intel",
+    "email_reputation",
+    "onion_hit",
     "unavailable",
     "blocked",
 ]
@@ -72,6 +74,7 @@ class EvidenceUnit(BaseModel):
     snapshot_ref: Optional[str] = None
     snapshot_hash: Optional[str] = None
     wayback_ref: Optional[str] = None
+    archive_today_ref: Optional[str] = None
 
     platform_enrichment: Optional[dict] = None
 

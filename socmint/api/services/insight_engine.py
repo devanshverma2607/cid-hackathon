@@ -25,8 +25,8 @@ from urllib.parse import urlparse
 # --- result_type taxonomy (mirrors api/models/evidence.py) ------------------
 PRESENCE_TYPES = {"account_found", "email_registered"}
 EXPOSURE_TYPES = {"breach_hit", "archive_hit"}
-ENRICH_TYPES = {"gravatar_hit", "google_hit", "whatsapp_hit", "phone_intel"}
-RECON_TYPES = {"domain_hit", "dork_hit"}
+ENRICH_TYPES = {"gravatar_hit", "google_hit", "whatsapp_hit", "phone_intel", "email_reputation"}
+RECON_TYPES = {"domain_hit", "dork_hit", "onion_hit"}
 NULL_TYPES = {"unavailable", "blocked"}
 
 # --- severity ladder (ordered for sorting) ----------------------------------

@@ -24,6 +24,7 @@ _ENRICHABLE_HOSTS = {
     "linkedin.com": "linkedin",
     "protonmail.com": "protonmail", "proton.me": "protonmail",
     "snapchat.com": "snapchat",
+    "reddit.com": "reddit", "old.reddit.com": "reddit",
 }
 _MAX_CONFIRMED_ENRICHMENTS = 25
 

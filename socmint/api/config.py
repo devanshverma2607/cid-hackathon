@@ -30,6 +30,14 @@ class Settings(BaseSettings):
     # Tool API keys
     h8mail_api_key: str = ""
     hibp_api_key: str = ""
+    emailrep_api_key: str = ""
+    censys_api_id: str = ""
+    censys_api_secret: str = ""
+    dnsdumpster_api_key: str = ""
+    picarta_api_key: str = ""
+    ai_geolocation_enabled: str = "0"
+    reddit_client_id: str = ""
+    reddit_client_secret: str = ""
 
     # Platform tokens
     instagram_session_id: str = ""

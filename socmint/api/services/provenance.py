@@ -147,6 +147,7 @@ class ProvenanceService:
             SET snapshot_ref         = :snapshot_ref,
                 snapshot_hash        = :snapshot_hash,
                 wayback_ref          = :wayback_ref,
+                archive_today_ref    = :archive_today_ref,
                 timestamp_preserved  = :timestamp_preserved
             WHERE evidence_id = :evidence_id
             """
@@ -157,6 +158,7 @@ class ProvenanceService:
                 "snapshot_ref": refs.get("snapshot_ref"),
                 "snapshot_hash": refs.get("snapshot_hash"),
                 "wayback_ref": refs.get("wayback_ref"),
+                "archive_today_ref": refs.get("archive_today_ref"),
                 "timestamp_preserved": _utcnow(),
                 "evidence_id": str(evidence_id),
             },

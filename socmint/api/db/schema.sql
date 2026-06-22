@@ -104,6 +104,10 @@ ALTER TABLE evidence_units
 ALTER TABLE evidence_units
     ADD COLUMN IF NOT EXISTS face_embedding vector(512);
 
+-- Archive.today secondary forensic snapshot reference (redundancy alongside Wayback).
+ALTER TABLE evidence_units
+    ADD COLUMN IF NOT EXISTS archive_today_ref TEXT;
+
 
 -- -----------------------------------------------------------------------------
 -- Identity links table

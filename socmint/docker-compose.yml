@@ -124,6 +124,15 @@ services:
       # Disable with FACE_RECOGNITION=0; degrades gracefully if weights missing.
       FACE_RECOGNITION: ${FACE_RECOGNITION:-1}
       TORCH_HOME: /root/.cache/torch
+      # New OSINT adapter credentials (all optional — degrade to unavailable)
+      EMAILREP_API_KEY: ${EMAILREP_API_KEY:-}
+      CENSYS_API_ID: ${CENSYS_API_ID:-}
+      CENSYS_API_SECRET: ${CENSYS_API_SECRET:-}
+      DNSDUMPSTER_API_KEY: ${DNSDUMPSTER_API_KEY:-}
+      PICARTA_API_KEY: ${PICARTA_API_KEY:-}
+      AI_GEOLOCATION_ENABLED: ${AI_GEOLOCATION_ENABLED:-0}
+      REDDIT_CLIENT_ID: ${REDDIT_CLIENT_ID:-}
+      REDDIT_CLIENT_SECRET: ${REDDIT_CLIENT_SECRET:-}
     command: celery -A worker_python.celery_app worker --loglevel=info --concurrency=4
     depends_on:
       postgres:
@@ -223,6 +232,9 @@ services:
       OLLAMA_BASE_URL: http://ollama:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
       LLM_NARRATIVES_ENABLED: ${LLM_NARRATIVES_ENABLED:-1}
+      # Photo geolocation + preservation (run in API service context)
+      PICARTA_API_KEY: ${PICARTA_API_KEY:-}
+      AI_GEOLOCATION_ENABLED: ${AI_GEOLOCATION_ENABLED:-0}
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000
     depends_on:
       postgres:

@@ -35,6 +35,12 @@ COOLDOWNS = {
     "virustotal": 15,
     "shodan": 2,
     "hunterio": 2,
+    "emailrep": 6,       # free: 10/day — be conservative
+    "epieos": 5,          # web scrape; polite interval
+    "ahmia": 15,          # Tor-routed, slow exits
+    "censys": 2,          # API rate limit
+    "dnsdumpster": 2,     # API rate limit
+    "reddit_intel": 2,    # OAuth API
 }
 
 
