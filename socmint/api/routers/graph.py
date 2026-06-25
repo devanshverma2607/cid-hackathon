@@ -15,10 +15,16 @@ router = APIRouter(prefix="/api/v1", tags=["graph"])
 
 
 @router.get("/graph/{case_id}")
-def get_graph(case_id: UUID, max_nodes: int = 50, include_pivots: bool = True) -> dict:
+def get_graph(
+    case_id: UUID,
+    max_nodes: int = 50,
+    include_pivots: bool = True,
+    include_interactions: bool = False,
+) -> dict:
     """Return the Plotly-ready {nodes, edges} graph for a case."""
     return GraphBuilder().export_graph_for_plotly(
-        case_id, max_nodes=max_nodes, include_pivots=include_pivots
+        case_id, max_nodes=max_nodes, include_pivots=include_pivots,
+        include_interactions=include_interactions,
     )
 
 

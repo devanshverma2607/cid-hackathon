@@ -53,6 +53,20 @@ class Settings(BaseSettings):
     # Local case output directory (mounted volume)
     cases_dir: str = "/app/cases"
 
+    # --- Social Depth Module (SDM) -------------------------------------------
+    sdm_enabled: str = "0"
+    sdm_max_posts_per_platform: int = 200
+    sdm_min_posts_for_tz_inference: int = 30
+    sdm_min_posts_for_rhythm_similarity: int = 50
+    sdm_silence_threshold_days: int = 7
+    sdm_max_interaction_targets: int = 20
+    sdm_min_interaction_count: int = 3
+    sdm_max_comment_threads: int = 50
+    sdm_photo_background_analysis_enabled: str = "0"
+    sdm_reverse_image_search_enabled: str = "1"
+    yandex_reverse_image_cooldown: int = 60
+    tineye_reverse_image_cooldown: int = 30
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

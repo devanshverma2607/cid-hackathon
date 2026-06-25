@@ -60,14 +60,15 @@ intelligence package:
 | **Bounded everything** | Pivot depth/breadth, preservation per tool, enrichment counts, and wire payloads are all capped. |
 | **Pure, testable cores** | Correlation, insight, profile, and persona engines operate on plain dict rows — no DB/network in the hot path — so they are unit‑testable with DTO fixtures. |
 
-### 1.3 The Four Tiers + the Brain
+### 1.3 The Five Tiers + the Brain
 
-The pipeline runs tools in four tiers and then closes the loop with a recursive **pivot** stage:
+The pipeline runs tools in five tiers and then closes the loop with a recursive **pivot** stage:
 
 - **Tier 1 — Fast sweep**: lightweight username/email/phone existence checks.
 - **Tier 2 — Deep sweep**: heavyweight username/email tools (Sherlock, Maigret, holehe, GHunt, …).
 - **Tier 3 — Passive recon**: Tor‑routed search‑engine dorking + archive/paste sweeps (off the critical path).
 - **Tier 4 — Triggered enrichment**: per‑platform profile scraping + domain recon, fired *after* correlation finds confirmed accounts.
+- **Tier 5 — Social Depth Module (SDM)**: behavioral analytics (rhythm, velocity, timezone) and interaction graph extraction, gated on `SDM_ENABLED=1`.
 - **Pivot Engine** — extracts new identifiers from collected evidence and re‑seeds them, hop after hop, bounded by depth/breadth/total caps. *This is what makes the system behave like a brain instead of a star.*
 
 ---
@@ -408,6 +409,7 @@ TIER_TOOLS = {
         "proton_intel", "linkedin2username", "theharvester", "finalrecon",
         "webdiver", "github_api", "sublist3r", "dnstwist",
         "virustotal", "shodan", "hunterio"],
+    5: ["behavioral_analysis", "network_extraction"],
 }
 ```
 
@@ -516,6 +518,7 @@ Tool chains are defined in the `FallbackChainManager` ([worker_python/adapters/f
 | `pipeline.finalize_correlation` | tier2_tasks | Chord‑drop watchdog |
 | `tier3.passive_recon` | tier3_tasks | Tor‑routed dorking/archive sweep (background) |
 | `tier4.platform_enrichment` | tier4_tasks | Per‑platform profile scrape + socid extraction + photo hash |
+| `tier5.behavioral_analysis` / `tier5.network_extraction` | social_depth_tasks | SDM rhythm/velocity analysis and interaction graph edges |
 | `pivot.domain_recon` | pivot_tasks | Domain tool matrix |
 | `pivot.expand` / `pivot.collect` | pivot_tasks | Recursive seed re‑dispatch loop |
 | `preservation.preserve_batch` | preservation_tasks | Background forensic preservation |
@@ -543,10 +546,11 @@ After the chord completes, `aggregate_results`:
 3. **`_enrich_confirmed_accounts`** — enriches confirmed first‑party accounts on *enrichable hosts*
    (so a single‑username case still gets its name/bio/location/avatar/creation‑date fetched). Bounded
    by `_MAX_CONFIRMED_ENRICHMENTS = 25`; skips non‑canonical URLs (`?`, `/api/`, `/search`, `/xrpc/`).
-4. **`_recon_discovered_domains`** — derives registrable domains from confirmed emails (skipping
+4. **`_dispatch_sdm_tasks`** — if `SDM_ENABLED=1`, triggers behavioral and network analysis for accounts with sufficient interaction/timeline data.
+5. **`_recon_discovered_domains`** — derives registrable domains from confirmed emails (skipping
    `_FREEMAIL_DOMAINS`) and sweeps each via `pivot.domain_recon`. Bounded by `_MAX_DOMAIN_RECON = 5`.
-5. **`derive_username_emails.delay()`** — candidate‑email derivation (below).
-6. **`run_pivot_expansion.delay(depth=0)`** — starts the brain loop.
+6. **`derive_username_emails.delay()`** — candidate‑email derivation (below).
+7. **`run_pivot_expansion.delay(depth=0)`** — starts the brain loop.
 
 `_ENRICHABLE_HOSTS` maps profile hosts → enrichment keys: `github.com→github`, `instagram.com→instagram`,
 `t.me/telegram.org/telegram.me→telegram`, `tiktok.com→tiktok`, `bsky.app→bluesky`, `linkedin.com→linkedin`,
@@ -1111,6 +1115,10 @@ the shared `go_tools` volume before starting its Celery worker; `ollama` pulls t
 | `PICARTA_API_KEY` | — | Picarta AI photo geolocation (requires `AI_GEOLOCATION_ENABLED=1`) |
 | `AI_GEOLOCATION_ENABLED` | `0` | Master toggle for AI‑based photo geolocation |
 | `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` | — | Reddit OAuth2 user profile enrichment |
+| `SDM_ENABLED` | `0` | Master toggle for Social Depth Module (behavioral/network analysis) |
+| `SDM_MAX_POSTS_PER_PLATFORM` | `200` | Fetch cap for timeline collection |
+| `SDM_MIN_POSTS_FOR_TZ_INFERENCE` | `30` | Minimum sample size for timezone inference |
+| `SDM_SILENCE_THRESHOLD_DAYS` | `7` | Days to trigger a rhythm break anomaly |
 
 ### 13.2 Tuning constants (in code)
 

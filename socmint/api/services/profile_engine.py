@@ -360,6 +360,9 @@ class ProfileEngine:
             identity, attributes, behavior, temporal, interests, footprint, case, summary
         ) if include_ai else None
 
+        # SDM behavioral data — extracted from enrichment blobs
+        sdm_behavioral, sdm_network, sdm_communities = self._sdm_data(live)
+
         return {
             "generated_at": _now().isoformat(),
             "case_id": str(case.get("case_id", "")),
@@ -375,6 +378,9 @@ class ProfileEngine:
             "persona_count": (persona or {}).get("persona_count"),
             "summary": summary,
             "ai_summary": ai_summary,
+            "sdm_behavioral": sdm_behavioral,
+            "sdm_network": sdm_network,
+            "sdm_communities": sdm_communities,
         }
 
     # -------------------------------------------------------------- collection
@@ -1382,3 +1388,49 @@ class ProfileEngine:
             "all attributes as unverified investigative leads requiring confirmation."
         )
         return LLMNarrator().generate(facts, instruction)
+
+    # --------------------------------------------------------- SDM extraction
+    @staticmethod
+    def _sdm_data(live: list[dict]) -> tuple[dict, dict, list]:
+        """Extract SDM behavioral/network/community data from evidence enrichment.
+
+        Returns (sdm_behavioral, sdm_network, sdm_communities).
+        """
+        sdm_behavioral: dict = {}
+        sdm_network: dict = {}
+        sdm_communities: list = []
+
+        for e in live:
+            notes = e.get("notes") or ""
+            enrich = e.get("platform_enrichment")
+            if not isinstance(enrich, dict):
+                continue
+            rt = e.get("result_type", "")
+
+            # Behavioral insights
+            if rt == "behavioral_insight" or "[behavioral-inferred]" in notes:
+                if enrich.get("inferred_timezone") and "inferred_timezone" not in sdm_behavioral:
+                    sdm_behavioral["inferred_timezone"] = enrich["inferred_timezone"]
+                if enrich.get("rhythm_breaks"):
+                    sdm_behavioral.setdefault("rhythm_breaks", []).extend(enrich["rhythm_breaks"])
+                if enrich.get("velocity_spikes"):
+                    sdm_behavioral.setdefault("velocity_spikes", []).extend(enrich["velocity_spikes"])
+
+            # Post timeline → posting frequency
+            if rt == "post_timeline_collected":
+                if enrich.get("posting_frequency") and "posting_frequency" not in sdm_behavioral:
+                    sdm_behavioral["posting_frequency"] = enrich["posting_frequency"]
+
+            # Interaction graph
+            if enrich.get("interaction_graph") and isinstance(enrich["interaction_graph"], dict):
+                for target, count in enrich["interaction_graph"].items():
+                    sdm_network[target] = sdm_network.get(target, 0) + count
+
+            # Community memberships
+            if rt == "community_membership_found":
+                comm = enrich.get("community")
+                if isinstance(comm, dict) and comm not in sdm_communities:
+                    sdm_communities.append(comm)
+
+        return sdm_behavioral, sdm_network, sdm_communities
+

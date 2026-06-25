@@ -24,6 +24,7 @@ celery_app = Celery(
         "worker_python.tasks.pivot_tasks",
         "worker_python.tasks.preservation_tasks",
         "worker_python.tasks.recovery_tasks",
+        "worker_python.tasks.social_depth_tasks",
     ],
 )
 

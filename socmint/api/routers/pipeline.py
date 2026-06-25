@@ -39,6 +39,10 @@ TIER_TOOLS = {
         "proton_intel", "linkedin2username", "theharvester", "finalrecon",
         "webdiver", "github_api", "sublist3r", "dnstwist", "virustotal", "shodan", "hunterio",
         "censys", "dnsdumpster", "reddit_intel"],
+    # SDM (Social Depth Module) — fires after Tier 4 for confirmed accounts.
+    5: ["sdm_profile_hydration", "sdm_photo_intelligence",
+        "sdm_behavioral_fingerprint", "sdm_network_extractor",
+        "sdm_community_membership"],
 }
 
 # Which seed types make each non-triggered tool *expected* to run for a case.

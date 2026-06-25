@@ -25,13 +25,19 @@ require_case(case_id)
 c1, c2 = st.columns([1, 1])
 include_pivots = c1.toggle("Show pivot edges (sources → identifiers)", value=True)
 max_nodes = c2.slider("Max links", min_value=10, max_value=200, value=50, step=10)
-color_by_community = st.toggle(
+c3, c4 = st.columns([1, 1])
+color_by_community = c3.toggle(
     "Colour accounts by community (Louvain / label propagation)", value=False,
     help="Sub-clusters within the identity graph — tightly-knit groups of accounts.",
 )
+include_interactions = c4.toggle(
+    "Show interaction edges (SDM network)", value=False,
+    help="INTERACTS_WITH edges from the Social Depth Module showing @-mention / reply associations.",
+)
 
 graph = api_get(f"/api/v1/graph/{case_id}",
-                params={"include_pivots": include_pivots, "max_nodes": max_nodes})
+                params={"include_pivots": include_pivots, "max_nodes": max_nodes,
+                        "include_interactions": include_interactions})
 if graph is None:
     st.stop()
 

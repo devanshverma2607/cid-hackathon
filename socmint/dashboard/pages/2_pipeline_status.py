@@ -183,6 +183,22 @@ def render_status() -> None:
         st.caption("Tier 4 tools fire automatically once a profile or domain is "
                    "confirmed — none triggered yet.")
 
+    # --- SDM (Social Depth Module) ------------------------------------------
+    tier5 = status.get("tier5", [])
+    sdm_fired = [t for t in tier5 if t.get("status") in ("done", "skipped", "pending")]
+    if sdm_fired:
+        sdm_done = sum(1 for t in sdm_fired if t.get("status") == "done")
+        st.subheader(f"Social Depth Module  ·  {sdm_done}/{len(sdm_fired)} complete")
+        cols = st.columns(4)
+        for i, tool in enumerate(sdm_fired):
+            with cols[i % 4]:
+                st.markdown(
+                    f"{tool_icon(tool, active)} **{tool.get('tool', '').replace('sdm_', '')}**  \n"
+                    f"<span style='color:#9aa3ad;font-size:0.82rem'>"
+                    f"{tool.get('status')} · {tool.get('hits', 0)} hits</span>",
+                    unsafe_allow_html=True,
+                )
+
     # --- lifecycle: keep the cached active-hint in sync and escalate the poll
     # cadence on a transition. The fragment never stops (it falls back to the
     # slow 5s heartbeat when not active), so the view can always recover if work

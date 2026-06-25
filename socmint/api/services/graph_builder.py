@@ -67,6 +67,39 @@ class GraphBuilder:
                 case_id=str(link.case_id),
             )
 
+    def upsert_interaction_edge(
+        self,
+        case_id: str,
+        subject_url: str,
+        target_username: str,
+        platform: str,
+        count: int = 1,
+    ) -> None:
+        """Create or update an INTERACTS_WITH edge (SDM network graph).
+
+        Records how often ``subject_url`` @-mentions / replies to
+        ``target_username`` on ``platform``.  The target is merged as a
+        lightweight Username node so it doesn't pollute the Account namespace
+        until confirmed by the main pipeline.
+        """
+        with get_driver().session() as session:
+            session.run(
+                """
+                MERGE (a:Account {url: $subject_url})
+                MERGE (t:Username {value: $target_username})
+                  ON CREATE SET t.platform = $platform
+                MERGE (a)-[r:INTERACTS_WITH]->(t)
+                SET r.count = $count,
+                    r.platform = $platform,
+                    r.case_id = $case_id
+                """,
+                subject_url=subject_url,
+                target_username=target_username,
+                platform=platform,
+                count=count,
+                case_id=str(case_id),
+            )
+
     def upsert_pivot_edge(
         self,
         case_id,
@@ -154,7 +187,8 @@ class GraphBuilder:
             self.upsert_identity_link(link)
 
     def export_graph_for_plotly(
-        self, case_id: UUID, max_nodes: int = 50, include_pivots: bool = True
+        self, case_id: UUID, max_nodes: int = 50, include_pivots: bool = True,
+        include_interactions: bool = False,
     ) -> dict:
         """Return {nodes, edges} for a case: SAME_AS links plus pivot DISCOVERED edges."""
         nodes: dict[str, dict] = {}
@@ -249,6 +283,44 @@ class GraphBuilder:
                             "via_tool": r.get("via_tool", ""),
                         }
                     )
+
+            # --- SDM INTERACTS_WITH edges ---
+            if include_interactions:
+                interactions = session.run(
+                    """
+                    MATCH (a:Account)-[r:INTERACTS_WITH {case_id: $case_id}]->(t:Username)
+                    RETURN a, t, r
+                    LIMIT $limit
+                    """,
+                    case_id=str(case_id),
+                    limit=max_nodes,
+                )
+                for record in interactions:
+                    a = record["a"]
+                    t = record["t"]
+                    r = record["r"]
+                    a_id = a.get("url")
+                    t_id = f"username:{t.get('value')}"
+                    if a_id and a_id not in nodes:
+                        nodes[a_id] = {
+                            "id": a_id, "label": a.get("username") or a_id,
+                            "platform": a.get("platform", "unknown"),
+                            "kind": "account", "url": a_id,
+                            "confidence": 0, "community": None,
+                        }
+                    if t_id not in nodes:
+                        nodes[t_id] = {
+                            "id": t_id, "label": t.get("value", ""),
+                            "platform": r.get("platform", "unknown"),
+                            "kind": "username", "url": None,
+                            "confidence": 0, "community": None,
+                        }
+                    edges.append({
+                        "source": a_id, "target": t_id,
+                        "confidence": 0, "tier": "INTERACTION",
+                        "kind": "interacts_with",
+                        "via_tool": f"sdm ({r.get('count', 0)} interactions)",
+                    })
         return {"nodes": list(nodes.values()), "edges": edges}
 
     # --------------------------------------------------- community detection

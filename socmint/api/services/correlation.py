@@ -39,6 +39,12 @@ W_ENRICHMENT = 5
 W_STYLOMETRY = 8   # author writing-style fingerprint (complements bio semantics)
 W_TEMPORAL = 6     # account-creation proximity (same owner, same era)
 
+# ---- SDM (Social Depth Module) behavioural signals -------------------------
+# These are corroborating signals only — they can NEVER push DISCARD→MEDIUM
+# alone; the 2-signal rule requires at least one non-behavioral signal.
+W_TIMEZONE_MATCH = 6       # inferred timezones agree ±1hr across platforms
+W_POSTING_RHYTHM = 5       # hour-of-day posting rhythm cosine ≥ 0.75
+
 # ---- Section 9.3 — conflict penalties --------------------------------------
 P_BOT = -15
 P_TIMEZONE = -10
@@ -46,6 +52,7 @@ P_LANGUAGE = -8
 P_BLACKLIST = -8
 P_IMPOSSIBLE_DATE = -5
 P_DUP_USERNAMES = -5
+P_TZ_BEHAVIORAL = -10     # inferred timezones conflict by >3hr across platforms
 
 # ---- Section 9.5 — decay periods (days) and floors -------------------------
 DECAY = {
@@ -71,7 +78,7 @@ LEVENSHTEIN_MAX = 2
 MIN_SIGNALS = 2
 
 # ---- engine identity + new-signal tuning -----------------------------------
-ENGINE_VERSION = "correlation-2.2"
+ENGINE_VERSION = "correlation-2.3"
 STYLOMETRY_THRESHOLD = 0.68   # conservative: short social bios are noisy
 STYLOMETRY_MIN_LEN = 24       # need enough text to fingerprint a style
 CREATION_PROXIMITY_DAYS = 45  # accounts created within ~6 weeks corroborate
@@ -140,6 +147,10 @@ class CorrelationEngine:
             "dup_usernames_platform": False,
             "min_age_days": 0,
             "platform": units[0].source_platform if units else "",
+            # SDM behavioral data (populated from enrichment)
+            "inferred_timezone": None,
+            "hour_histogram": None,
+            "hour_histogram_sample": 0,
         }
         ages = []
         for unit in units:
@@ -182,6 +193,18 @@ class CorrelationEngine:
                     profile["is_bot"] = True
                 if enrichment.get("allows_duplicate_usernames"):
                     profile["dup_usernames_platform"] = True
+                # SDM: extract behavioral data from enrichment
+                if enrichment.get("inferred_timezone") and not profile["inferred_timezone"]:
+                    profile["inferred_timezone"] = enrichment["inferred_timezone"]
+                freq = enrichment.get("posting_frequency") or {}
+                if freq.get("hour_histogram") and not profile["hour_histogram"]:
+                    profile["hour_histogram"] = freq["hour_histogram"]
+                    profile["hour_histogram_sample"] = freq.get("sample_size", 0)
+                if not profile["inferred_timezone"]:
+                    # Check nested profile_snapshot for behavioural data
+                    snap = enrichment.get("profile_snapshot") or {}
+                    if isinstance(snap, dict) and snap.get("inferred_timezone"):
+                        profile["inferred_timezone"] = snap["inferred_timezone"]
 
         profile["min_age_days"] = min(ages) if ages else 0
         profile["usernames"].discard("")
@@ -271,6 +294,31 @@ class CorrelationEngine:
         if self._creation_proximity(a.get("join_date"), b.get("join_date")):
             add_signal("creation_proximity", W_TEMPORAL)
 
+        # ---- SDM behavioural signals (corroborating only) --------------------
+        # These never elevate a link alone; they require a non-behavioral signal.
+        tz_a = a.get("inferred_timezone")
+        tz_b = b.get("inferred_timezone")
+        if tz_a and tz_b and isinstance(tz_a, dict) and isinstance(tz_b, dict):
+            try:
+                from api.services.behavioral_engine import tz_offsets_agree, tz_offsets_conflict
+                if tz_offsets_agree(tz_a, tz_b):
+                    add_signal("timezone_match [behavioral-inferred]", W_TIMEZONE_MATCH)
+            except Exception:  # noqa: BLE001
+                pass
+        hist_a = a.get("hour_histogram")
+        hist_b = b.get("hour_histogram")
+        if hist_a and hist_b:
+            try:
+                from api.services.behavioral_engine import posting_rhythm_similar
+                sim = posting_rhythm_similar(
+                    hist_a, hist_b,
+                    min_posts_each=50, threshold=0.75,
+                )
+                if sim is not None:
+                    add_signal("posting_rhythm_similarity [behavioral-inferred]", W_POSTING_RHYTHM)
+            except Exception:  # noqa: BLE001
+                pass
+
         # ---- conflict penalties --------------------------------------------
         penalties: dict[str, int] = {}
 
@@ -291,6 +339,14 @@ class CorrelationEngine:
             add_penalty("impossible_creation_date", P_IMPOSSIBLE_DATE)
         if a["dup_usernames_platform"] or b["dup_usernames_platform"]:
             add_penalty("duplicate_usernames_allowed", P_DUP_USERNAMES)
+        # SDM: inferred timezone conflict
+        if tz_a and tz_b and isinstance(tz_a, dict) and isinstance(tz_b, dict):
+            try:
+                from api.services.behavioral_engine import tz_offsets_conflict
+                if tz_offsets_conflict(tz_a, tz_b):
+                    add_penalty("timezone_behavioral_conflict", P_TZ_BEHAVIORAL)
+            except Exception:  # noqa: BLE001
+                pass
 
         signal_count = len(breakdown)
         tier = self._tier(score, signal_count)

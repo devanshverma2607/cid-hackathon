@@ -13,6 +13,7 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, Field
 
 # result_type — exact Literal values from MODULE 0 / Section 5.
+# SDM (Social Depth Module) types are appended at the end.
 ResultType = Literal[
     "account_found",
     "email_registered",
@@ -26,6 +27,13 @@ ResultType = Literal[
     "phone_intel",
     "email_reputation",
     "onion_hit",
+    # --- SDM result types ---
+    "profile_change_detected",
+    "behavioral_insight",
+    "reverse_image_hit",
+    "post_timeline_collected",
+    "community_membership_found",
+    # --- status markers ---
     "unavailable",
     "blocked",
 ]

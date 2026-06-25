@@ -326,6 +326,113 @@ if bf:
     st.divider()
 
 # ---------------------------------------------------------------------------
+# SDM — Behavioral Intelligence (deep posting analysis)
+# ---------------------------------------------------------------------------
+sdm_data = profile.get("sdm_behavioral", {})
+if not sdm_data:
+    # Try to pull from evidence enrichment
+    for ev in (dossier.get("evidence_summary", {}).get("behavioral_insights") or []):
+        if isinstance(ev, dict):
+            sdm_data.update(ev)
+
+if sdm_data:
+    st.subheader("🧠 Behavioral Intelligence")
+    st.caption(
+        "Deep posting analysis from the Social Depth Module. "
+        "All inferences are [behavioral-inferred] and require analyst verification."
+    )
+    s1, s2 = st.columns(2)
+    with s1:
+        # Posting frequency
+        freq = sdm_data.get("posting_frequency", {})
+        if freq.get("sufficient"):
+            ppd = freq.get("posts_per_day", {})
+            st.metric("Avg posts/day", ppd.get("mean", "—"))
+            st.metric("Active days", freq.get("active_days", "—"))
+            st.metric("Activity density",
+                      f"{round(freq.get('activity_density', 0) * 100)}%")
+            # Activity heatmap
+            hist = freq.get("hour_histogram", [])
+            if hist and len(hist) == 24:
+                try:
+                    st.bar_chart(
+                        pd.DataFrame({"posts": hist}, index=range(24)),
+                        height=160,
+                    )
+                    st.caption("Posts by hour of day (UTC) — SDM behavioral analysis.")
+                except Exception:
+                    pass
+    with s2:
+        # Inferred timezone
+        tz = sdm_data.get("inferred_timezone", {})
+        if tz and isinstance(tz, dict):
+            offset = tz.get("utc_offset_point")
+            if offset is not None:
+                st.metric("Inferred UTC offset", f"UTC{'+' if offset >= 0 else ''}{offset}")
+                st.caption(
+                    f"Confidence: {tz.get('confidence_raw', '?')} · "
+                    f"Sample: {tz.get('sample_size', '?')} posts · "
+                    f"Trough ratio: {tz.get('trough_ratio', '?')} · "
+                    f"[behavioral-inferred]"
+                )
+        # Rhythm breaks
+        breaks = sdm_data.get("rhythm_breaks", [])
+        if breaks:
+            st.markdown("**🔇 Rhythm breaks** _(posting silences)_")
+            for b in breaks[:5]:
+                st.markdown(
+                    f"- {b.get('start_date', '?')} → {b.get('end_date', '?')} "
+                    f"({b.get('duration_days', '?')} days)"
+                )
+        # Velocity spikes
+        spikes = sdm_data.get("velocity_spikes", [])
+        if spikes:
+            st.markdown("**📈 Velocity spikes** _(posting surges)_")
+            for s in spikes[:5]:
+                st.markdown(
+                    f"- {s.get('start_date', '?')} → {s.get('end_date', '?')} "
+                    f"({s.get('posts_in_window', '?')} posts, "
+                    f"baseline {s.get('baseline_rate', '?')})"
+                )
+    st.divider()
+
+# ---------------------------------------------------------------------------
+# SDM — Network Interactions & Community Memberships
+# ---------------------------------------------------------------------------
+sdm_network = profile.get("sdm_network", {})
+sdm_communities = profile.get("sdm_communities", [])
+if not sdm_network:
+    for ev in (dossier.get("evidence_summary", {}).get("interaction_graphs") or []):
+        if isinstance(ev, dict):
+            sdm_network.update(ev)
+if not sdm_communities:
+    sdm_communities = dossier.get("evidence_summary", {}).get("community_memberships", [])
+
+if sdm_network or sdm_communities:
+    st.subheader("🌐 Network & Communities")
+    n1, n2 = st.columns(2)
+    with n1:
+        if sdm_network:
+            st.markdown("**Top interaction targets**")
+            rows = []
+            for target, count in sorted(sdm_network.items(),
+                                        key=lambda kv: -kv[1])[:15]:
+                rows.append({"target": target, "interactions": count})
+            if rows:
+                st.dataframe(pd.DataFrame(rows), use_container_width=True,
+                             hide_index=True)
+    with n2:
+        if sdm_communities:
+            st.markdown("**Community memberships**")
+            for comm in sdm_communities[:20]:
+                if isinstance(comm, dict):
+                    st.markdown(
+                        f"- **{comm.get('name', '?')}** ({comm.get('platform', '?')})")
+                else:
+                    st.markdown(f"- {comm}")
+    st.divider()
+
+# ---------------------------------------------------------------------------
 # Behavioral indicators (inferred leads) + OPSEC posture
 # ---------------------------------------------------------------------------
 bi = profile.get("behavioral_indicators", {})

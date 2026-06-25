@@ -180,3 +180,61 @@ if leads:
     )
 else:
     st.caption("No new pivot leads beyond the seeds.")
+
+# --- SDM behavioral leads ---------------------------------------------------
+sdm_leads = intel.get("behavioral_leads", [])
+sdm_communities = intel.get("community_leads", [])
+sdm_network = intel.get("network_leads", [])
+
+if sdm_leads or sdm_communities or sdm_network:
+    st.subheader("🧠 Behavioral Leads")
+    st.caption(
+        "Leads from the Social Depth Module — activity patterns, rhythm anomalies, "
+        "community memberships, and interaction networks. All tagged [behavioral-inferred]."
+    )
+
+    if sdm_leads:
+        for lead in sdm_leads[:10]:
+            if isinstance(lead, dict):
+                icon = "📊"
+                lead_type = lead.get("type", "")
+                if "rhythm" in lead_type.lower():
+                    icon = "🔇"
+                elif "spike" in lead_type.lower() or "velocity" in lead_type.lower():
+                    icon = "📈"
+                elif "timezone" in lead_type.lower():
+                    icon = "🕐"
+                with st.container(border=True):
+                    st.markdown(
+                        f"{icon} **{lead.get('title', lead_type)}**  ·  "
+                        f"_{lead.get('platform', '')}_ · conf {lead.get('confidence', '?')}"
+                    )
+                    if lead.get("detail"):
+                        st.caption(lead["detail"])
+                    if lead.get("basis"):
+                        st.caption(f"Basis: {lead['basis']}")
+
+    bl1, bl2 = st.columns(2)
+    with bl1:
+        if sdm_communities:
+            st.markdown("**Community memberships**")
+            for comm in sdm_communities[:15]:
+                if isinstance(comm, dict):
+                    st.markdown(f"- **{comm.get('name', '?')}** ({comm.get('platform', '?')})")
+                else:
+                    st.markdown(f"- {comm}")
+    with bl2:
+        if sdm_network:
+            st.markdown("**Top interaction associates**")
+            rows = []
+            for assoc in sdm_network[:10]:
+                if isinstance(assoc, dict):
+                    rows.append({
+                        "target": assoc.get("target", "?"),
+                        "interactions": assoc.get("count", 0),
+                        "platform": assoc.get("platform", "?"),
+                    })
+            if rows:
+                st.dataframe(pd.DataFrame(rows), use_container_width=True,
+                             hide_index=True)
+

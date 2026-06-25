@@ -379,12 +379,14 @@ def aggregate_results(results, case_id: str, run_id: str, analyst_id: str) -> di
     # Fire Tier 4 platform enrichment for HIGH/MEDIUM links.
     enrichment_dispatched = 0
     dispatched_urls: set[str] = set()
+    dispatched_platforms: dict[str, tuple[str, str]] = {}   # platform → (url, username)
     for link in links:
         if link.confidence_tier in ("HIGH", "MEDIUM"):
             for platform, account in ((link.platform_a, link.account_a), (link.platform_b, link.account_b)):
                 username = account.rstrip("/").rsplit("/", 1)[-1].lstrip("@")
                 run_platform_enrichment.delay(platform, account, username, case_id, run_id, analyst_id)
                 dispatched_urls.add(account)
+                dispatched_platforms[platform] = (account, username)
                 enrichment_dispatched += 1
 
     # Also enrich confirmed first-party accounts on enrichable platforms even
@@ -395,6 +397,20 @@ def aggregate_results(results, case_id: str, run_id: str, analyst_id: str) -> di
     enrichment_dispatched += _enrich_confirmed_accounts(
         case_id, run_id, analyst_id, dispatched_urls, run_platform_enrichment
     )
+
+    # --- Social Depth Module: fire depth tasks for every confirmed platform ---
+    # SDM tasks are independent and non-blocking. Gated on SDM_ENABLED.
+    try:
+        from worker_python.tasks.social_depth_tasks import dispatch_sdm_for_platform
+        sdm_dispatched = 0
+        for platform, (account_url, uname) in dispatched_platforms.items():
+            sdm_dispatched += dispatch_sdm_for_platform(
+                platform, account_url, uname, case_id, run_id, analyst_id,
+            )
+        if sdm_dispatched:
+            logger.info("SDM: dispatched %d depth tasks for case %s", sdm_dispatched, case_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("SDM dispatch failed (non-blocking): %s", exc)
 
     # Sweep the domain Tier 4 matrix on any org domains found in confirmed
     # emails so theHarvester/finalrecon/webdiver/sublist3r/dnstwist are exercised

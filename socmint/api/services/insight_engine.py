@@ -27,6 +27,8 @@ PRESENCE_TYPES = {"account_found", "email_registered"}
 EXPOSURE_TYPES = {"breach_hit", "archive_hit"}
 ENRICH_TYPES = {"gravatar_hit", "google_hit", "whatsapp_hit", "phone_intel", "email_reputation"}
 RECON_TYPES = {"domain_hit", "dork_hit", "onion_hit"}
+SDM_TYPES = {"behavioral_insight", "post_timeline_collected", "community_membership_found",
+             "reverse_image_hit", "profile_change_detected"}
 NULL_TYPES = {"unavailable", "blocked"}
 
 # --- severity ladder (ordered for sorting) ----------------------------------
@@ -192,6 +194,9 @@ class InsightEngine:
             identifiers, accounts, exposure, risk, exposure_score, coverage, findings, narrative
         ) if include_ai else None
 
+        # SDM behavioral/network/community leads
+        behavioral_leads, community_leads, network_leads = self._sdm_leads(live)
+
         return {
             "generated_at": _now().isoformat(),
             "case_id": str(case.get("case_id", "")),
@@ -210,6 +215,9 @@ class InsightEngine:
             "coverage": coverage,
             "narrative": narrative,
             "ai_narrative": ai_narrative,
+            "behavioral_leads": behavioral_leads,
+            "community_leads": community_leads,
+            "network_leads": network_leads,
         }
 
     # ------------------------------------------------------------- identifiers
@@ -767,3 +775,76 @@ class InsightEngine:
             "tools_unavailable": unavailable,
             "total_evidence_units": len(evidence),
         }
+
+    # -------------------------------------------------------- SDM leads
+    @staticmethod
+    def _sdm_leads(live: list[dict]) -> tuple[list, list, list]:
+        """Extract SDM behavioral/community/network leads from evidence."""
+        behavioral_leads: list[dict] = []
+        community_leads: list[dict] = []
+        network_leads: list[dict] = []
+
+        for e in live:
+            rt = e.get("result_type", "")
+            notes = e.get("notes") or ""
+            enrich = e.get("platform_enrichment")
+            if not isinstance(enrich, dict):
+                continue
+            platform = _platform_of(e)
+
+            if rt == "behavioral_insight" or "[behavioral-inferred]" in notes:
+                if enrich.get("inferred_timezone"):
+                    tz = enrich["inferred_timezone"]
+                    offset = tz.get("utc_offset_point", 0)
+                    behavioral_leads.append({
+                        "type": "timezone_inference",
+                        "title": f"Inferred timezone: UTC{'+' if offset >= 0 else ''}{offset}",
+                        "platform": platform,
+                        "confidence": tz.get("confidence_raw", 0),
+                        "detail": (
+                            f"Sleep trough detected, "
+                            f"{tz.get('sample_size', 0)} posts analysed."
+                        ),
+                        "basis": "posting hour-of-day distribution [behavioral-inferred]",
+                    })
+                for brk in enrich.get("rhythm_breaks", []):
+                    behavioral_leads.append({
+                        "type": "rhythm_break",
+                        "title": (
+                            f"Activity silence: {brk.get('start_date', '?')} "
+                            f"\u2192 {brk.get('end_date', '?')}"
+                        ),
+                        "platform": platform,
+                        "confidence": 0.40,
+                        "detail": f"{brk.get('duration_days', '?')}-day gap.",
+                        "basis": "posting rhythm analysis [behavioral-inferred]",
+                    })
+                for spk in enrich.get("velocity_spikes", []):
+                    behavioral_leads.append({
+                        "type": "velocity_spike",
+                        "title": (
+                            f"Posting surge: {spk.get('start_date', '?')} "
+                            f"\u2192 {spk.get('end_date', '?')}"
+                        ),
+                        "platform": platform,
+                        "confidence": 0.40,
+                        "detail": (
+                            f"{spk.get('posts_in_window', '?')} posts vs "
+                            f"baseline {spk.get('baseline_rate', '?')}/window."
+                        ),
+                        "basis": "posting velocity analysis [behavioral-inferred]",
+                    })
+
+            if rt == "community_membership_found":
+                comm = enrich.get("community")
+                if isinstance(comm, dict):
+                    community_leads.append(comm)
+
+            ig = enrich.get("interaction_graph")
+            if ig and isinstance(ig, dict):
+                for target, count in sorted(ig.items(), key=lambda kv: -kv[1])[:10]:
+                    network_leads.append({
+                        "target": target, "count": count, "platform": platform,
+                    })
+
+        return behavioral_leads, community_leads, network_leads
