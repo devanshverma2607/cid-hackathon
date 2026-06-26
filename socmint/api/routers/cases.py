@@ -14,6 +14,8 @@ from sqlalchemy.orm import Session
 
 from api.db.postgres import get_db
 from api.models.case import CaseCreate
+from api.models.user import UserOut
+from api.services.auth import get_current_user
 from api.services.legal_gate import LegalGate
 from api.services.provenance import ProvenanceService
 
@@ -98,32 +100,34 @@ def _ensure_case_seeds_table(session: Session) -> None:
 
 
 @router.post("/create", status_code=status.HTTP_201_CREATED)
-def create_case(payload: CaseCreate, session: Session = Depends(get_db)) -> dict:
-    """Validate, persist, and start the pipeline for a new case.
 
+def create_case(
+    payload: CaseCreate,
+    current_user: UserOut = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> dict:
+    """Validate, persist, and start the pipeline for a new case.
     Accepts one *or more* subject identifiers (the primary ``seed_type``/
     ``seed_value`` plus any ``additional_seeds``). Every identifier is validated
     by the Legal Gate, persisted to ``case_seeds``, and dispatched under the same
     ``case_id`` so all evidence is correlated together.
     """
+    # 0. Auto-populate analyst_id from the authenticated user.
+    payload.analyst_id = current_user.username
     # 1. Legal Gate — hard control on the mandatory fields + primary seed.
-    ok, errors = legal_gate.validate(payload)
-
+    ok, errors = legal_gate.validate(payload, current_user=current_user)
     # 1b. Validate each additional identifier independently.
     for idx, extra in enumerate(payload.additional_seeds):
         if not legal_gate.validate_seed(extra.seed_type, extra.seed_value):
             errors.append(f"additional_seeds[{idx}]")
-
     if errors:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail={"message": "Legal gate validation failed", "fields": errors},
         )
-
     # 2. Build the de-duplicated seed set (primary first), normalise + resolve.
     case_id = legal_gate.issue_case_id()
     run_id = legal_gate.issue_run_id()
-
     raw_seeds = [(payload.seed_type, payload.seed_value, True)] + [
         (s.seed_type, s.seed_value, False) for s in payload.additional_seeds
     ]
@@ -145,9 +149,7 @@ def create_case(payload: CaseCreate, session: Session = Depends(get_db)) -> dict
                 "is_primary": is_primary,
             }
         )
-
     primary = seeds[0]
-
     # 3. Persist the case (primary seed denormalised onto the row).
     session.execute(
         text(
@@ -167,7 +169,7 @@ def create_case(payload: CaseCreate, session: Session = Depends(get_db)) -> dict
             "case_id": str(case_id),
             "authority_id": payload.authority_id,
             "agency_id": payload.agency_id,
-            "analyst_id": payload.analyst_id,
+            "analyst_id": current_user.username,
             "supervisor_approval": payload.supervisor_approval,
             "purpose_statement": payload.purpose_statement,
             "target_category": payload.target_category,
@@ -177,7 +179,6 @@ def create_case(payload: CaseCreate, session: Session = Depends(get_db)) -> dict
             "seed_value": primary["seed_value"],
         },
     )
-
     # 3b. Persist the full identifier set.
     _ensure_case_seeds_table(session)
     for seed in seeds:
@@ -195,13 +196,12 @@ def create_case(payload: CaseCreate, session: Session = Depends(get_db)) -> dict
             {"case_id": str(case_id), **seed},
         )
     session.commit()
-
     # 4. Audit the intake.
     provenance.log_audit_event(
         case_id=case_id,
         run_id=run_id,
         event_type="CASE_CREATED",
-        actor_id=payload.analyst_id,
+        actor_id=current_user.username,
         metadata={
             "seed_type": primary["seed_type"],
             "seed_value": primary["seed_value"],
@@ -212,7 +212,6 @@ def create_case(payload: CaseCreate, session: Session = Depends(get_db)) -> dict
         },
         session=session,
     )
-
     # 5. Dispatch ONE combined pipeline across every identifier so correlation
     #    runs a single time over the union of all inputs' evidence (best-effort;
     #    never fail case creation on a dispatch error).
@@ -221,7 +220,7 @@ def create_case(payload: CaseCreate, session: Session = Depends(get_db)) -> dict
     ]
     pipeline_status = "pipeline_started"
     try:
-        _dispatch_multi_pipeline(dispatch_seeds, case_id, run_id, payload.analyst_id)
+        _dispatch_multi_pipeline(dispatch_seeds, case_id, run_id, current_user.username)
     except Exception as exc:  # noqa: BLE001
         pipeline_status = "pipeline_dispatch_failed"
         provenance.log_audit_event(
@@ -232,7 +231,6 @@ def create_case(payload: CaseCreate, session: Session = Depends(get_db)) -> dict
             metadata={"error": str(exc), "seed_count": len(seeds)},
             session=session,
         )
-
     return {
         "case_id": str(case_id),
         "run_id": str(run_id),
@@ -244,7 +242,10 @@ def create_case(payload: CaseCreate, session: Session = Depends(get_db)) -> dict
 
 
 @router.get("")
-def list_cases(session: Session = Depends(get_db)) -> dict:
+def list_cases(
+    _user: UserOut = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> dict:
     """List all cases (newest first) with evidence/link counts for the picker."""
     rows = session.execute(
         text(
@@ -272,7 +273,11 @@ def list_cases(session: Session = Depends(get_db)) -> dict:
 
 
 @router.get("/{case_id}")
-def get_case(case_id: UUID, session: Session = Depends(get_db)) -> dict:
+def get_case(
+    case_id: UUID,
+    _user: UserOut = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> dict:
     """Return a stored case by id."""
     row = session.execute(
         text("SELECT * FROM cases WHERE case_id = :case_id"),

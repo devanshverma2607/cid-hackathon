@@ -8,10 +8,12 @@ import streamlit as st
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parent.parent))
 from socmint_ui import (  # noqa: E402
-    active_case_id, api_get, api_get_bytes, api_post, case_selector, require_case,
+    active_case_id, api_get, api_get_bytes, api_post, case_selector, require_auth, require_case,
 )
 
 st.set_page_config(page_title="Report", page_icon="📦", layout="wide")
+require_auth()
+
 st.title("📦 Report & Evidence Bundle")
 st.caption("Generate the signed JSON + PDF + SHA-256 manifest for the case.")
 

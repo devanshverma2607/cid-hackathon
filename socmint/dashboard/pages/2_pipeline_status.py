@@ -10,10 +10,12 @@ import streamlit as st
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parent.parent))
 from socmint_ui import (  # noqa: E402
-    active_case_id, api_get, case_selector, fmt_dt, require_case, status_icon,
+    active_case_id, api_get, case_selector, fmt_dt, require_auth, require_case,
+    status_icon,
 )
 
 st.set_page_config(page_title="Pipeline Status", page_icon="⚙️", layout="wide")
+require_auth()
 st.title("⚙️ Pipeline Status")
 st.caption("Watch Tier 1-4 tools execute. The scan timer ticks live and stops when the run completes.")
 

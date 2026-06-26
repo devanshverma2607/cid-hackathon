@@ -15,10 +15,12 @@ import streamlit as st
 sys.path.append(str(pathlib.Path(__file__).resolve().parent.parent))
 from socmint_ui import (  # noqa: E402
     active_case_id, api_get, case_selector, conf_bar, conf_color, metric_card,
-    require_case, risk_gauge, score_color, timeline_chart,
+    require_auth, require_case, risk_gauge, score_color, timeline_chart,
 )
 
 st.set_page_config(page_title="Subject Dossier", page_icon="🕵️", layout="wide")
+require_auth()
+
 st.title("🕵️ Subject Dossier")
 st.caption(
     "An algorithmically inferred profile of the subject — graded by confidence. "

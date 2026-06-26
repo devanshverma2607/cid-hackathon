@@ -11,11 +11,12 @@ import streamlit.components.v1 as components
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parent.parent))
 from socmint_ui import (  # noqa: E402
-    active_case_id, api_get, api_get_bytes, case_selector, fmt_dt, require_case,
-    status_icon,
+    active_case_id, api_get, api_get_bytes, case_selector, fmt_dt, require_auth,
+    require_case, status_icon,
 )
 
 st.set_page_config(page_title="Evidence Explorer", page_icon="🔎", layout="wide")
+require_auth()
 st.title("🔎 Evidence Explorer")
 st.caption("Every preserved finding for the case — filter, inspect, and view snapshots.")
 

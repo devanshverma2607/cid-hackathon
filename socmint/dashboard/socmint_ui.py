@@ -16,7 +16,27 @@ DEFAULT_TIMEOUT = 20
 
 
 # ---------------------------------------------------------------------------
-# API client
+# Authentication helpers
+# ---------------------------------------------------------------------------
+
+def _auth_headers() -> dict:
+    """Build the Authorization header from session state, or empty dict."""
+    token = st.session_state.get("auth_token")
+    return {"Authorization": f"Bearer {token}"} if token else {}
+def require_auth() -> None:
+    """Guard: redirect to the login page if no JWT is stored.
+    Call this as the first line after imports in every protected page.
+    """
+    if not st.session_state.get("auth_token"):
+        st.switch_page("pages/0_login.py")
+def logout() -> None:
+    """Clear auth state and redirect to login."""
+    for key in ("auth_token", "user"):
+        st.session_state.pop(key, None)
+    st.switch_page("pages/0_login.py")
+
+# ---------------------------------------------------------------------------
+# API client (auth-aware)
 # ---------------------------------------------------------------------------
 
 def get_api_base() -> str:
@@ -29,7 +49,12 @@ def get_api_base() -> str:
 def api_get(path: str, params: Optional[dict] = None, *, timeout: int = DEFAULT_TIMEOUT):
     """GET JSON from the API. Shows an error and returns None on failure."""
     try:
-        resp = requests.get(f"{get_api_base()}{path}", params=params, timeout=timeout)
+        resp = requests.get(
+            f"{get_api_base()}{path}",
+            params=params,
+            headers=_auth_headers(),
+            timeout=timeout,
+        )
         resp.raise_for_status()
         return resp.json()
     except Exception as exc:  # noqa: BLE001
@@ -40,7 +65,11 @@ def api_get(path: str, params: Optional[dict] = None, *, timeout: int = DEFAULT_
 def api_get_bytes(path: str, *, timeout: int = DEFAULT_TIMEOUT) -> Optional[bytes]:
     """GET raw bytes (e.g. a preserved screenshot). Returns None on failure."""
     try:
-        resp = requests.get(f"{get_api_base()}{path}", timeout=timeout)
+        resp = requests.get(
+            f"{get_api_base()}{path}",
+            headers=_auth_headers(),
+            timeout=timeout,
+        )
         resp.raise_for_status()
         return resp.content
     except Exception:  # noqa: BLE001
@@ -50,7 +79,12 @@ def api_get_bytes(path: str, *, timeout: int = DEFAULT_TIMEOUT) -> Optional[byte
 def api_post(path: str, json: Optional[dict] = None, *, timeout: int = DEFAULT_TIMEOUT):
     """POST JSON to the API. Returns the Response, or None on a connection error."""
     try:
-        return requests.post(f"{get_api_base()}{path}", json=json, timeout=timeout)
+        return requests.post(
+            f"{get_api_base()}{path}",
+            json=json,
+            headers=_auth_headers(),
+            timeout=timeout,
+        )
     except Exception as exc:  # noqa: BLE001
         st.error(f"API POST {path} failed: {exc}")
         return None
@@ -64,7 +98,11 @@ def api_post(path: str, json: Optional[dict] = None, *, timeout: int = DEFAULT_T
 def fetch_cases() -> list[dict]:
     """Return all cases (newest first) for the picker. Empty list on failure."""
     try:
-        resp = requests.get(f"{get_api_base()}/api/v1/cases", timeout=DEFAULT_TIMEOUT)
+        resp = requests.get(
+            f"{get_api_base()}/api/v1/cases",
+            headers=_auth_headers(),
+            timeout=DEFAULT_TIMEOUT,
+        )
         resp.raise_for_status()
         return resp.json().get("cases", [])
     except Exception:  # noqa: BLE001

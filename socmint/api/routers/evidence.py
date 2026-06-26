@@ -12,6 +12,8 @@ from sqlalchemy.orm import Session
 
 from api.db import minio_client
 from api.db.postgres import get_db
+from api.models.user import UserOut
+from api.services.auth import get_current_user
 from api.services.provenance import ProvenanceService
 
 router = APIRouter(prefix="/api/v1/evidence", tags=["evidence"])
@@ -32,6 +34,7 @@ def list_evidence(
     result_type: Optional[str] = None,
     platform: Optional[str] = None,
     include_unavailable: bool = False,
+    _user: UserOut = Depends(get_current_user),
     session: Session = Depends(get_db),
 ) -> dict:
     """List evidence units for a case, with optional tier/type/platform filters."""
@@ -61,7 +64,11 @@ def list_evidence(
 
 
 @router.get("/{case_id}/review-queue")
-def review_queue(case_id: UUID, session: Session = Depends(get_db)) -> dict:
+def review_queue(
+    case_id: UUID,
+    _user: UserOut = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> dict:
     """Return MEDIUM-tier links awaiting an analyst decision."""
     rows = session.execute(
         text(
@@ -79,7 +86,10 @@ def review_queue(case_id: UUID, session: Session = Depends(get_db)) -> dict:
 
 @router.post("/review/{link_id}")
 def submit_review(
-    link_id: UUID, payload: ReviewDecision, session: Session = Depends(get_db)
+    link_id: UUID,
+    payload: ReviewDecision,
+    current_user: UserOut = Depends(get_current_user),
+    session: Session = Depends(get_db),
 ) -> dict:
     """Record an analyst decision on an identity link (audited)."""
     if payload.decision not in ("CONFIRMED", "REJECTED", "FLAG_UNCERTAIN"):
@@ -108,7 +118,7 @@ def submit_review(
         case_id=case_id,
         run_id=None,
         event_type="ANALYST_DECISION",
-        actor_id=payload.analyst_id,
+        actor_id=current_user.username,
         metadata={"link_id": str(link_id), "decision": payload.decision, "note": payload.note},
         session=session,
     )
@@ -116,7 +126,12 @@ def submit_review(
 
 
 @router.get("/{case_id}/screenshot/{evidence_id}")
-def get_screenshot(case_id: UUID, evidence_id: UUID, session: Session = Depends(get_db)) -> Response:
+def get_screenshot(
+    case_id: UUID,
+    evidence_id: UUID,
+    _user: UserOut = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> Response:
     """Stream the preserved screenshot (PNG) for an evidence unit from MinIO."""
     row = session.execute(
         text("SELECT snapshot_ref FROM evidence_units WHERE evidence_id = :eid AND case_id = :cid"),

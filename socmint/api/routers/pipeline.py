@@ -8,6 +8,8 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from api.db.postgres import get_db
+from api.models.user import UserOut
+from api.services.auth import get_current_user
 
 router = APIRouter(prefix="/api/v1/pipeline", tags=["pipeline"])
 
@@ -26,7 +28,11 @@ TIER_TOOLS = {
 
 
 @router.get("/status/{case_id}")
-def pipeline_status(case_id: UUID, session: Session = Depends(get_db)) -> dict:
+def pipeline_status(
+    case_id: UUID,
+    _user: UserOut = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> dict:
     """Aggregate evidence + audit data into a per-tier, per-tool status view."""
     rows = session.execute(
         text(

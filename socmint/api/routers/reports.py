@@ -10,13 +10,19 @@ from sqlalchemy.orm import Session
 
 from api.db import minio_client
 from api.db.postgres import get_db
+from api.models.user import UserOut
+from api.services.auth import get_current_user
 from api.services.report_generator import ReportGenerator
 
 router = APIRouter(prefix="/api/v1/reports", tags=["reports"])
 
 
 @router.post("/generate/{case_id}")
-def generate_report(case_id: UUID, session: Session = Depends(get_db)) -> dict:
+def generate_report(
+    case_id: UUID,
+    _user: UserOut = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> dict:
     """Build the JSON package + PDF, sign the bundle, and store all outputs."""
     generator = ReportGenerator()
     json_package = generator.generate_json_package(case_id, session)
@@ -38,31 +44,35 @@ def _download(case_id: UUID, suffix: str, media_type: str) -> Response:
 
 
 @router.get("/download/{case_id}/json")
-def download_json(case_id: UUID) -> Response:
+def download_json(case_id: UUID, _user: UserOut = Depends(get_current_user)) -> Response:
     """Download the JSON evidence package."""
     return _download(case_id, "report.json", "application/json")
 
 
 @router.get("/download/{case_id}/pdf")
-def download_pdf(case_id: UUID) -> Response:
+def download_pdf(case_id: UUID, _user: UserOut = Depends(get_current_user)) -> Response:
     """Download the PDF report."""
     return _download(case_id, "report.pdf", "application/pdf")
 
 
 @router.get("/download/{case_id}/html")
-def download_html(case_id: UUID) -> Response:
+def download_html(case_id: UUID, _user: UserOut = Depends(get_current_user)) -> Response:
     """Download the interactive HTML report."""
     return _download(case_id, "report.html", "text/html; charset=utf-8")
 
 
 @router.get("/download/{case_id}/sha256")
-def download_sha256(case_id: UUID) -> Response:
+def download_sha256(case_id: UUID, _user: UserOut = Depends(get_current_user)) -> Response:
     """Download the bundle SHA-256 manifest."""
     return _download(case_id, "bundle.sha256", "text/plain")
 
 
 @router.get("/status/{case_id}")
-def report_status(case_id: UUID, session: Session = Depends(get_db)) -> dict:
+def report_status(
+    case_id: UUID,
+    _user: UserOut = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> dict:
     """Report readiness summary for a case."""
     evidence_count = session.execute(
         text("SELECT COUNT(*) FROM evidence_units WHERE case_id = :cid"),

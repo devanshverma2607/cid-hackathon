@@ -13,6 +13,7 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./api/db/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - ./api/db/migrations/003_google_oauth.sql:/docker-entrypoint-initdb.d/03_google_oauth.sql:ro
     ports:
       - "5432:5432"
     restart: unless-stopped

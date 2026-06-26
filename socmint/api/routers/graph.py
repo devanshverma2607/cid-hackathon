@@ -9,13 +9,20 @@ from sqlalchemy.orm import Session
 
 from api.db import minio_client, neo4j as neo4j_db
 from api.db.postgres import get_db
+from api.models.user import UserOut
+from api.services.auth import get_current_user
 from api.services.graph_builder import GraphBuilder
 
 router = APIRouter(prefix="/api/v1", tags=["graph"])
 
 
 @router.get("/graph/{case_id}")
-def get_graph(case_id: UUID, max_nodes: int = 50, include_pivots: bool = True) -> dict:
+def get_graph(
+    case_id: UUID,
+    max_nodes: int = 50,
+    include_pivots: bool = True,
+    _user: UserOut = Depends(get_current_user),
+) -> dict:
     """Return the Plotly-ready {nodes, edges} graph for a case."""
     return GraphBuilder().export_graph_for_plotly(
         case_id, max_nodes=max_nodes, include_pivots=include_pivots
@@ -23,7 +30,10 @@ def get_graph(case_id: UUID, max_nodes: int = 50, include_pivots: bool = True) -
 
 
 @router.get("/graph/{case_id}/communities")
-def get_communities(case_id: UUID) -> dict:
+def get_communities(
+    case_id: UUID,
+    _user: UserOut = Depends(get_current_user),
+) -> dict:
     """Detect community structure in the case identity graph (Louvain / fallback)."""
     return GraphBuilder().detect_communities(case_id, write_back=True)
 

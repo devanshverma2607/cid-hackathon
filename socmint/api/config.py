@@ -44,6 +44,21 @@ class Settings(BaseSettings):
 
     # Local case output directory (mounted volume)
     cases_dir: str = "/app/cases"
+    # JWT / Authentication
+    jwt_secret_key: str = "CHANGE-ME-IN-PRODUCTION"
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 480  # 8-hour analyst session
+    # Bootstrap admin — created on first startup when users table is empty
+    socmint_admin_email: str = ""
+    socmint_admin_password: str = ""
+    socmint_admin_username: str = "admin"
+    # Google OAuth 2.0
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_redirect_uri: str = "http://localhost:8000/api/v1/auth/google/callback"
+    # Where to redirect the browser after a successful Google login
+    frontend_url: str = "http://localhost:8501"
+
 
     model_config = SettingsConfigDict(
         env_file=".env",

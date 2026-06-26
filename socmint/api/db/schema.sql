@@ -149,3 +149,20 @@ CREATE INDEX IF NOT EXISTS idx_audit_case_event
 -- The application must NEVER issue UPDATE or DELETE against audit_log.
 -- Example (run by a DBA with a dedicated app role):
 --   GRANT INSERT ON audit_log TO socmint_app;
+-- -----------------------------------------------------------------------------
+-- Users table (Authentication & Registration — Feature 1)
+-- Roles: analyst (default), supervisor (can authorise cases), admin (user mgmt).
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS users (
+    user_id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    username        TEXT NOT NULL UNIQUE,
+    email           TEXT NOT NULL UNIQUE,
+    hashed_password TEXT NOT NULL,
+    full_name       TEXT NOT NULL DEFAULT '',
+    role            TEXT NOT NULL DEFAULT 'analyst'
+                    CHECK (role IN ('analyst', 'supervisor', 'admin')),
+    is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_users_email    ON users (email);
+CREATE INDEX IF NOT EXISTS idx_users_username ON users (username);

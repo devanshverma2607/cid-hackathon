@@ -8,10 +8,13 @@ import streamlit as st
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parent.parent))
 from socmint_ui import (  # noqa: E402
-    active_case_id, api_get, api_post, case_selector, require_case, tier_badge,
+    active_case_id, api_get, api_post, case_selector, require_auth, require_case,
+    tier_badge,
 )
 
 st.set_page_config(page_title="Review Queue", page_icon="✅", layout="wide")
+require_auth()
+
 st.title("✅ Review Queue")
 st.caption("MEDIUM-confidence links require an analyst decision before reporting.")
 

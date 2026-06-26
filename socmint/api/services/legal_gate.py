@@ -11,8 +11,12 @@ import os
 import re
 import uuid
 from uuid import UUID
+from typing import TYPE_CHECKING, Optional
 
 from api.models.case import CaseCreate
+
+if TYPE_CHECKING:
+    from api.models.user import UserOut
 
 EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
 URL_RE = re.compile(r"^https?://[A-Za-z0-9.\-]+\.[A-Za-z]{2,}(?:[:/?#].*)?$", re.I)
@@ -50,8 +54,18 @@ MANDATORY_FIELDS = (
 class LegalGate:
     """Enforces authorisation, normalises the seed, and issues identifiers."""
 
-    def validate(self, case_data: CaseCreate) -> tuple[bool, list[str]]:
-        """Return (True, []) if all checks pass, else (False, [bad fields])."""
+    def validate(
+        self,
+        case_data: CaseCreate,
+        *,
+        current_user: Optional[UserOut] = None,
+    ) -> tuple[bool, list[str]]:
+        """Return (True, []) if all checks pass, else (False, [bad fields]).
+        When *current_user* is supplied (the authenticated analyst), the gate
+        enforces **dual-control**: ``supervisor_approval`` requires that the
+        creating user holds the ``supervisor`` or ``admin`` role. An analyst
+        cannot self-approve.
+        """
         errors: list[str] = []
         data = case_data.model_dump()
 
@@ -67,6 +81,11 @@ class LegalGate:
         # supervisor_approval must be True.
         if data.get("supervisor_approval") is not True:
             errors.append("supervisor_approval")
+
+        # --- Dual-control: the creating user must be supervisor/admin ------
+        if current_user is not None and data.get("supervisor_approval") is True:
+            if current_user.role not in ("supervisor", "admin"):
+                errors.append("supervisor_approval")
 
         # purpose_statement must be at least 20 characters.
         purpose = data.get("purpose_statement") or ""

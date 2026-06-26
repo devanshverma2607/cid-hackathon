@@ -8,9 +8,10 @@ import pandas as pd
 import streamlit as st
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parent.parent))
-from socmint_ui import api_post, fetch_cases  # noqa: E402
+from socmint_ui import api_post, fetch_cases, require_auth  # noqa: E402
 
 st.set_page_config(page_title="Case Intake", page_icon="📋", layout="wide")
+require_auth()
 st.title("📋 Case Intake")
 st.caption("All fields are mandatory. Supervisor approval is legally required.")
 

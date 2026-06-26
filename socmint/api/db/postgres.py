@@ -4,7 +4,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import Iterator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -61,3 +61,27 @@ def get_db() -> Iterator[Session]:
         yield session
     finally:
         session.close()
+
+
+# ---------------------------------------------------------------------------
+# User lookup helpers (raw SQL — matches the project's non-ORM pattern)
+# ---------------------------------------------------------------------------
+def get_user_by_username(session: Session, username: str) -> dict | None:
+    """Fetch a full user row by username for authentication.
+    Returns a plain dict (including ``hashed_password``) or ``None``.
+    """
+    row = session.execute(
+        text("SELECT * FROM users WHERE username = :username"),
+        {"username": username},
+    ).mappings().first()
+    return dict(row) if row else None
+
+def get_user_by_email(session: Session, email: str) -> dict | None:
+    """Fetch a full user row by email for authentication.
+    Returns a plain dict (including ``hashed_password``) or ``None``.
+    """
+    row = session.execute(
+        text("SELECT * FROM users WHERE email = :email"),
+        {"email": email},
+    ).mappings().first()
+    return dict(row) if row else None

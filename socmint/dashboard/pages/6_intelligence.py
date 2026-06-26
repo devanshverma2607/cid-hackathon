@@ -13,10 +13,12 @@ import streamlit as st
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parent.parent))
 from socmint_ui import (  # noqa: E402
-    active_case_id, api_get, case_selector, require_case,
+    active_case_id, api_get, case_selector, require_auth, require_case,
 )
 
 st.set_page_config(page_title="Intelligence", page_icon="🧠", layout="wide")
+require_auth()
+
 st.title("🧠 Intelligence Assessment")
 st.caption("The smart synthesis — profile, exposure, ranked findings, and leads.")
 

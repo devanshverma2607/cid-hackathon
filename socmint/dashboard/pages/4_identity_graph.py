@@ -10,11 +10,13 @@ import streamlit as st
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parent.parent))
 from socmint_ui import (  # noqa: E402
-    KIND_COLORS, active_case_id, api_get, case_selector, kind_color, require_case,
-    tier_color,
+    KIND_COLORS, active_case_id, api_get, case_selector, kind_color, require_auth,
+    require_case, tier_color,
 )
 
 st.set_page_config(page_title="Identity Graph", page_icon="🕸️", layout="wide")
+require_auth()
+
 st.title("🕸️ Identity Graph")
 st.caption("Correlated identities (SAME_AS) and the pivots that discovered them.")
 

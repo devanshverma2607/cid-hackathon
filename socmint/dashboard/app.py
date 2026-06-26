@@ -16,12 +16,29 @@ import streamlit as st
 sys.path.append(str(pathlib.Path(__file__).resolve().parent))
 from socmint_ui import (  # noqa: E402
     active_case_id, api_get, case_selector, fetch_cases, fmt_dt, get_api_base,
-    short_id,
+    logout, require_auth, short_id,
 )
 
 st.set_page_config(page_title="SOCMINT Suspect Profiling", page_icon="🛰️", layout="wide")
 st.session_state.setdefault("api_base_url", os.environ.get("API_BASE_URL", "http://api:8000"))
 
+# --- Pick up JWT from URL (Google OAuth callback lands here) ----------------
+_token_from_url = st.query_params.get("token", "")
+if _token_from_url and not st.session_state.get("auth_token"):
+    try:
+        _me = requests.get(
+            f"{get_api_base()}/api/v1/auth/me",
+            headers={"Authorization": f"Bearer {_token_from_url}"},
+            timeout=10,
+        )
+        if _me.status_code == 200:
+            st.session_state["auth_token"] = _token_from_url
+            st.session_state["user"] = _me.json()
+    except Exception:  # noqa: BLE001
+        pass
+    st.query_params.clear()
+# --- Auth guard — redirect to login if no token ----------------------------
+require_auth()
 
 def fetch_health() -> dict:
     """Poll the API health endpoint; never raise to the UI."""
@@ -37,6 +54,19 @@ st.title("🛰️ SOCMINT — Suspect Profiling System")
 st.caption("Lawful OSINT pipeline · discover → correlate → preserve → report")
 
 with st.sidebar:
+    # --- User info & logout ------------------------------------------------
+    user = st.session_state.get("user", {})
+    user_display = user.get("full_name") or user.get("username", "Analyst")
+    user_role = user.get("role", "analyst")
+    st.markdown(
+        f"👤 **{user_display}**  \n"
+        f"<span style='color:#8a909a;font-size:0.8rem'>{user_role}</span>",
+        unsafe_allow_html=True,
+    )
+    if st.button("🚪 Logout", use_container_width=True):
+        logout()
+    st.divider()
+
     st.header("System Status")
     health = fetch_health()
     badge = {"healthy": "🟢", "degraded": "🟡", "unreachable": "🔴"}.get(

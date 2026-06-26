@@ -16,6 +16,8 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from api.db.postgres import get_db
+from api.models.user import UserOut
+from api.services.auth import get_current_user
 from api.services.insight_engine import InsightEngine
 from api.services.persona_resolver import PersonaResolver
 from api.services.profile_engine import ProfileEngine
@@ -29,7 +31,11 @@ def _rows(session: Session, sql: str, case_id: UUID) -> list[dict]:
 
 
 @router.get("/{case_id}")
-def get_dossier(case_id: UUID, session: Session = Depends(get_db)) -> dict:
+def get_dossier(
+    case_id: UUID,
+    _user: UserOut = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> dict:
     """Build and return the full consolidated dossier for a case."""
     evidence = _rows(session, "SELECT * FROM evidence_units WHERE case_id = :cid", case_id)
     links = _rows(

@@ -12,11 +12,13 @@ import streamlit as st
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parent.parent))
 from socmint_ui import (  # noqa: E402
-    active_case_id, api_get, case_selector, fmt_dt, require_case, short_id,
+    active_case_id, api_get, case_selector, fmt_dt, require_auth, require_case, short_id,
     tier_badge, tier_color,
 )
 
 st.set_page_config(page_title="Identity Resolution", page_icon="🧬", layout="wide")
+require_auth()
+
 st.title("🧬 Identity Resolution")
 st.caption(
     "Fuses every collected signal — shared emails, phones, reused handles, "

@@ -9,6 +9,8 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from api.db.postgres import get_db
+from api.models.user import UserOut
+from api.services.auth import get_current_user
 from api.services.insight_engine import InsightEngine
 
 router = APIRouter(prefix="/api/v1/insights", tags=["insights"])
@@ -20,7 +22,11 @@ def _rows(session: Session, sql: str, case_id: UUID) -> list[dict]:
 
 
 @router.get("/{case_id}")
-def get_insights(case_id: UUID, session: Session = Depends(get_db)) -> dict:
+def get_insights(
+    case_id: UUID,
+    _user: UserOut = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> dict:
     """Build and return the ranked intelligence assessment for a case."""
     evidence = _rows(
         session, "SELECT * FROM evidence_units WHERE case_id = :cid", case_id
@@ -37,7 +43,11 @@ def get_insights(case_id: UUID, session: Session = Depends(get_db)) -> dict:
 
 
 @router.get("/{case_id}/ai-narrative")
-def get_ai_narrative(case_id: UUID, session: Session = Depends(get_db)) -> dict:
+def get_ai_narrative(
+    case_id: UUID,
+    _user: UserOut = Depends(get_current_user),
+    session: Session = Depends(get_db),
+) -> dict:
     """Generate the optional grounded local-LLM narrative for a case.
 
     Kept on a dedicated endpoint so the main assessment renders instantly; this
